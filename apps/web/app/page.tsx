@@ -1,3 +1,5 @@
+import { SourcePicker } from "@/components/source-picker";
+
 export default function Home() {
   return (
     <>
@@ -49,84 +51,8 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Input Mode Switcher (Tabs) */}
-        <div className="bg-[#151518] p-1 rounded-full border border-zinc-800/80 flex items-center mb-6">
-          {/* Active Tab: YouTube Link */}
-          <button
-            className="flex items-center gap-2 px-5 py-2 rounded-full bg-[#202025] text-white text-xs font-semibold shadow-sm transition"
-            type="button"
-          >
-            {/* YouTube / Link Icon */}
-            <svg
-              className="w-3.5 h-3.5 text-zinc-300"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              viewBox="0 0 24 24"
-            >
-              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-            </svg>
-            <span>YouTube Link</span>
-          </button>
-          {/* Inactive Tab: Upload File */}
-          <button
-            className="flex items-center gap-2 px-5 py-2 rounded-full text-zinc-400 hover:text-zinc-200 text-xs font-medium transition"
-            type="button"
-          >
-            {/* Upload Icon */}
-            <svg
-              className="w-3.5 h-3.5 text-zinc-500"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              viewBox="0 0 24 24"
-            >
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" x2="12" y1="3" y2="15" />
-            </svg>
-            <span>Upload File</span>
-          </button>
-        </div>
-
-        {/* Main Input Bar */}
-        <div className="w-full max-w-2xl px-2">
-          <div className="relative flex items-center bg-[#131317] border border-[#2b2b34] focus-within:border-zinc-500 rounded-full p-1.5 shadow-2xl transition-all duration-200">
-            {/* Left Link Icon */}
-            <div className="pl-4 pr-2 text-zinc-500">
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                viewBox="0 0 24 24"
-              >
-                <rect height="18" rx="2" width="18" x="3" y="3" />
-                <path d="M9 3v18" />
-              </svg>
-            </div>
-            {/* Input Field */}
-            <input
-              className="w-full bg-transparent border-none text-zinc-100 placeholder-zinc-500 text-sm focus:ring-0 focus:outline-none py-2 px-1"
-              placeholder="Paste a YouTube link or drop an audio file"
-              type="text"
-            />
-            {/* Extract Stems CTA Button */}
-            <button
-              className="purple-gradient-btn shrink-0 text-white text-xs sm:text-sm font-semibold px-6 py-2.5 rounded-full transition-all duration-200 active:scale-[0.98]"
-              type="button"
-            >
-              Extract Stems
-            </button>
-          </div>
-        </div>
+        {/* Input Mode Switcher + Upload/YouTube flows */}
+        <SourcePicker />
 
         {/* Separation Mode Settings */}
         <div className="mt-8 flex flex-col items-center">
