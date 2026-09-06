@@ -11,10 +11,11 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { ObjectKeyError } from "./types";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
-  assertKeyInPrefix,
+  assertSignableKey,
+} from "./signable";
+import {
   sanitizeFilename,
   sourceObjectKey,
   type ObjectInfo,
@@ -22,13 +23,6 @@ import {
   type SignedDownload,
   type StorageAdapter,
 } from "./types";
-
-/** Keys the adapter will sign or delete — sources and results only, ever. */
-function assertSignableKey(objectKey: string): void {
-  if (objectKey.startsWith("sources/")) return;
-  if (objectKey.startsWith("results/")) return;
-  throw new ObjectKeyError(objectKey, "sources/ or results/");
-}
 
 export type R2Config = {
   accountId: string;

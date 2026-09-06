@@ -3,6 +3,13 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Export root .env so Next.js sees it regardless of workspace cwd.
+if [ -f .env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
 if [ ! -d node_modules ]; then
   echo "Installing dependencies..."
   npm install

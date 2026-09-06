@@ -6,7 +6,6 @@
 
 import {
   assertKeyInPrefix,
-  sanitizeFilename,
   sourceObjectKey,
   type ObjectInfo,
   type PresignedUpload,
