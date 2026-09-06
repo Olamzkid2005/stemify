@@ -12,6 +12,21 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 ```
 
+### FFmpeg
+
+The input pipeline needs `ffmpeg`/`ffprobe`. It looks for vendored static
+binaries in `worker/bin/` first, then `PATH`. To vendor them (macOS Intel
+example, from evermeet.cx):
+
+```bash
+mkdir -p worker/bin && cd worker/bin
+curl -sLO https://evermeet.cx/ffmpeg/getrelease/zip && unzip ffmpeg.zip
+curl -sLO https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip && unzip ffprobe.zip
+chmod +x ffmpeg ffprobe
+```
+
+`worker/bin/` is gitignored — binaries are never committed.
+
 ## Verify
 
 ```bash

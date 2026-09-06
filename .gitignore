@@ -22,6 +22,9 @@ out/
 *.th
 modal-volume/
 
+# Vendored static ffmpeg binaries (re-downloadable; see worker/README.md)
+worker/bin/
+
 # Agent skill/tool directories
 .agents/
 .claude/
