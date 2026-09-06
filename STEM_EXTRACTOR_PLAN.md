@@ -1,99 +1,138 @@
-# Stem Separator Product and Implementation Plan
+# Stemify Local Stem Separator Plan
 
 ## 1. Product Summary
 
-Build a public web product that lets a user visit one website, upload an MP3, choose a separation mode and output format, wait while the track is processed, preview the resulting stems, and download them.
+Stemify is a local application for separating music into stems. The user runs one
+command:
 
-The primary experience must feel like this:
+```bash
+./start.sh
+```
 
-1. Open the website.
-2. Drop an MP3 onto the upload area or choose a file.
-3. Choose a simple separation mode and output format.
-4. Click `Separate audio`.
-5. Watch clear progress.
-6. Play or download the generated stems.
+The command verifies the local prerequisites and starts both application processes:
 
-The user must not need to know that the system uses Vercel, Modal, Python, PyTorch, GPU workers, object storage, or a database. Those are implementation details.
+- The Next.js web application and API on `http://localhost:3000`.
+- The Python audio worker that processes jobs locally with Demucs.
 
-The original YouTube-link requirement remains supported, but it is a secondary input mode. File upload is the first and most reliable launch workflow.
+The user then opens the local website, selects an audio file, chooses a separation
+mode and output format, starts a job, watches progress, previews the results, and
+downloads the generated stems.
 
-## 2. Product Name and Positioning
+There is no production deployment, cloud worker, managed database, cloud object
+storage, or third-party runtime service in this plan. Audio files, job metadata,
+model weights, logs, and generated stems remain on the local machine unless the
+user explicitly copies them elsewhere.
 
-Working name: `Olamzkid Stem Separator`.
+The primary product promise is:
 
-The name, domain, logo, and final copy can change later. The implementation should not hard-code a brand name into the architecture.
+> Fast, simple music stem separation on your own computer.
 
-Positioning:
+Processing time depends on the user's CPU/GPU and track length. Do not promise a
+fixed completion time until local benchmarks support a documented target.
 
-> Fast, simple music stem separation in your browser.
+## 2. Goals
 
-Avoid promising perfect separation or an absolute five-minute guarantee. The correct product promise is:
+### 2.1 Core goals
 
-> Supported tracks are normally processed within five minutes.
-
-The service must enforce input limits and capacity controls so that it can make this promise honestly.
-
-## 3. Goals
-
-### 3.1 Launch goals
-
-- Make the upload-and-process workflow usable without technical knowledge.
-- Provide high-quality vocal/instrumental separation as the default mode.
-- Provide a multi-stem mode when the selected model meets the quality and latency bar.
+- Make the complete upload-to-results workflow work locally.
+- Start the frontend and processing worker with `start.sh`.
+- Use a local SQLite database for job state.
+- Use local filesystem directories for source files and generated results.
+- Run real Demucs separation locally rather than a placeholder implementation.
+- Support vocals/instrumental separation as the default mode.
+- Support full-stem separation when the selected Demucs profile passes quality and
+  performance checks.
 - Support MP3, WAV, FLAC, OGG, and M4A output choices.
-- Run the web application on Vercel.
-- Run the audio-processing worker independently on Modal GPU infrastructure.
-- Keep long-running processing asynchronous so the web request never waits for GPU inference.
-- Provide progress, useful errors, retry behavior, and secure downloads.
-- Keep generated files private and automatically delete them after a retention period.
-- Make the system observable enough to diagnose failed or slow jobs.
+- Keep the browser responsive while processing runs in the worker process.
+- Show useful progress, failure messages, retry behavior, previews, and downloads.
+- Keep input and output files private to the local application by default.
+- Make the worker independently testable from the web UI.
+- Keep model versions, dependencies, and processing settings reproducible.
 
-### 3.2 Quality goals
+### 2.2 Local-first goals
 
-- Pin model versions and dependencies for reproducible output.
-- Benchmark candidate models before selecting the production default.
-- Preserve timing and channel layout correctly.
-- Avoid audible clicks, discontinuities, clipping, and truncated output.
-- Keep the original input filename available in the result metadata without trusting it as a filesystem path.
+- A new developer can install prerequisites, run the setup commands, and use the
+  application without creating accounts with infrastructure providers.
+- The application works without a network connection after dependencies and model
+  weights have been installed, except for optional YouTube importing.
+- `start.sh` fails early with actionable setup instructions when a prerequisite is
+  missing.
+- Stopping `start.sh` stops both child processes cleanly.
+- A stale or interrupted job cannot leave the UI spinning forever.
+- A local application restart preserves job metadata and completed results.
 
-### 3.3 Product goals after MVP
+## 3. Non-Goals
 
-- Add user accounts and persistent job history.
-- Add paid credits or subscriptions.
-- Add a public API.
-- Add additional separation models and modes.
-- Add batch processing.
-- Add optional on-demand conversion to other formats.
+The following are explicitly out of scope for the local product:
 
-## 4. Non-Goals for the First Launch
+- Vercel, Modal, Supabase, Neon, Cloudflare R2, AWS S3, or any other deployment
+  provider.
+- Cloud-hosted processing or remote GPU execution.
+- A managed Postgres requirement.
+- Direct browser uploads to remote object storage.
+- Signed cloud download URLs.
+- Worker callback webhooks, callback secrets, or remote event delivery.
+- Production domains, public hosting, autoscaling, cloud queueing, or billing.
+- Public anonymous usage controls intended to manage cloud GPU cost.
+- Accounts, subscriptions, paid credits, or persistent hosted job history.
+- Processing full albums, playlists, livestreams, or unrestricted long recordings.
+- DRM, private, age-restricted, or otherwise access-controlled media.
+- Training a new separation model.
+- A DAW, waveform editor, mixer, mastering tool, or music-production suite.
+- A guarantee that lossy source audio can be restored to lossless quality.
 
-The first public version should not attempt to do all of the following:
+Optional YouTube import remains a local feature candidate, but it is secondary to
+local file upload and requires network access while downloading the source. It must
+be disabled or omitted from the first working local vertical slice if it adds
+complexity.
 
-- Run the GPU model inside Vercel.
-- Support arbitrary remote URLs beyond explicitly supported YouTube hosts.
-- Process full albums, playlists, livestreams, or very long recordings.
-- Offer unlimited anonymous usage.
-- Guarantee studio-quality stems for every genre or source.
-- Train a new separation model from scratch.
-- Build a custom audio waveform editor.
-- Build a DAW, mixer, mastering tool, or full music-production suite.
-- Store user files permanently by default.
-- Generate every output format automatically when one selected format is sufficient.
-- Bypass private, DRM-protected, age-restricted, or otherwise restricted media.
+## 4. Product Decisions
 
-## 5. Important Product Decisions
+### 4.1 One local application
 
-These decisions are part of the plan and should not be changed casually during implementation.
+The user should think of Stemify as one local application. Internally it consists
+of a web process and a worker process, but the user starts both with one command.
 
-### 5.1 Upload-first experience
+```text
+start.sh
+  -> Next.js web/API process on localhost:3000
+  -> Python worker process using the same local data directory
+```
 
-The home page is the working application, not a marketing landing page. The upload control is the dominant first-viewport element.
+The worker must bind to localhost only if it exposes an HTTP health/control port.
+It must never listen on all network interfaces by default.
 
-YouTube URL input is available through a secondary tab or expandable option labelled `Import from YouTube`. It must not make the upload flow harder to find.
+### 4.2 Upload-first experience
 
-### 5.2 One selected output format per job
+The home page is the working application. The upload control is the dominant first
+viewport element.
 
-The user selects one output format for a job:
+The initial flow is:
+
+1. Open `http://localhost:3000`.
+2. Drop an audio file or choose one from the local filesystem.
+3. Choose a separation mode.
+4. Choose one output format.
+5. Click `Separate audio`.
+6. Watch progress.
+7. Preview or download the generated stems.
+
+YouTube import is a secondary tab or disclosure and must not obscure file upload.
+
+### 4.3 Separation modes
+
+Expose only validated modes:
+
+- `Vocals + instrumental`: default mode, producing `vocals` and `instrumental`.
+- `Full stems`: optional mode, producing `vocals`, `drums`, `bass`, and `other`.
+
+The first real implementation should use a validated Demucs profile. Do not expose
+full-stem mode merely because the UI can display it; it must pass the model and
+performance acceptance criteria first.
+
+### 4.4 One output format per job
+
+The user selects one output format:
 
 - MP3
 - WAV
@@ -101,144 +140,154 @@ The user selects one output format for a job:
 - OGG
 - M4A
 
-The result is a ZIP containing every generated stem in that selected format. This satisfies the five-format requirement while keeping processing time, storage, and bandwidth predictable.
+The job produces each stem in that format and one ZIP containing the stems plus a
+safe `manifest.json`. An all-formats export is out of scope until the single-format
+flow is reliable.
 
-An `All formats` export can be added later. If it is added, it must be a separate explicit option because it multiplies output size and encoding time.
+### 4.5 Local guest identity
 
-### 5.3 Separation modes
+No account is required. The web app uses a signed, HTTP-only local session cookie
+to associate jobs with the browser. This is for accidental cross-browser access
+protection, not cloud-scale abuse prevention.
 
-The initial mode list should be small:
+The job URL must not be treated as sufficient authorization by itself. Download and
+status routes must verify the local session owner or a deliberately generated job
+access token.
 
-- `Vocals + instrumental`: the default and fastest mode. Use the best currently validated two-source model available to the project.
-- `Full stems`: a multi-source model producing vocals, drums, bass, and other, only if it meets quality and timing benchmarks.
-
-A six-stem mode with guitar and piano can be added after the basic flow is stable. It should not be exposed merely because a model claims to support it; it must pass the benchmark suite and remain within the supported duration limit.
-
-### 5.4 Guest access for the initial product
-
-The first product version should allow a visitor to process a limited number of jobs without creating an account. This minimizes friction and matches the requested experience.
-
-Guest protection must include:
-
-- Per-IP rate limiting.
-- Per-browser/session limits.
-- Maximum file size and duration.
-- Maximum concurrent jobs per fingerprint.
-- Short output retention.
-- An abuse-reporting path.
-
-Accounts and paid usage should be added before uncontrolled public scale.
-
-### 5.5 Async job model
-
-Every extraction is a job. The browser starts a job and polls its status. It does not hold open a request while the GPU works.
-
-There are two IDs:
-
-- `app_job_id`: generated by the web application and safe to expose to the browser.
-- `worker_call_id`: the internal Modal execution reference, never exposed as the public job identifier.
-
-The database maps the two IDs.
-
-## 6. High-Level Architecture
+## 5. Local Architecture
 
 ```text
-                         User browser
-                              |
-                              | HTTPS
-                              v
-                 Next.js application on Vercel
-          upload UI, API routes, status, signed downloads
-                    |                         |
-                    |                         |
-                    v                         v
-             Neon Postgres              Object storage
-             job metadata               private source/results
-                    |                         ^
-                    |                         |
-                    v                         |
-             Modal HTTP endpoint ------------+
-                    |
-                    | spawn/queue async job
-                    v
-          Modal GPU processing container
-       yt-dlp -> decode -> model -> encode -> upload
-                    |
-                    | signed internal callback
-                    v
-        Vercel internal worker-event endpoint
+                         Local computer
+
+  +----------------+       HTTP/JSON       +----------------------+
+  | Browser        | <-------------------> | Next.js web/API      |
+  | localhost      |                       | localhost:3000       |
+  +----------------+                       +----------+-----------+
+                                                       |
+                                           SQLite + local filesystem
+                                                       |
+                                            +----------v-----------+
+                                            | Python worker        |
+                                            | Demucs + FFmpeg      |
+                                            | long-running process |
+                                            +----------------------+
 ```
 
-### 6.1 Web application
+### 5.1 Web application responsibilities
 
-Responsibilities:
+The Next.js application is the local control plane. It must:
 
-- Render the upload-first user interface.
-- Validate user input before a job is created.
-- Create presigned upload URLs for source files.
-- Create and persist application jobs.
-- Trigger the Modal worker asynchronously.
-- Expose job status to the browser.
-- Accept authenticated worker progress/completion events.
-- Issue short-lived signed download URLs.
-- Apply quotas, rate limits, and abuse controls.
-- Never run model inference or proxy large audio files through a Vercel function.
+- Render the upload-first UI.
+- Accept local file uploads through a server route.
+- Validate user input before creating jobs.
+- Store uploaded source files under a server-owned data directory.
+- Create SQLite job records.
+- Wake or notify the worker when a job is queued, or allow the worker to poll the
+  queue at a short interval.
+- Expose sanitized job status to the browser.
+- Authorize status, preview, download, retry, and cancellation requests.
+- Stream local result files only after authorization.
+- Never expose absolute filesystem paths, internal database details, or raw worker
+  tracebacks to the browser.
 
-### 6.2 Modal worker
+The web app does not run Demucs inference. It must remain responsive while the
+worker processes a track.
 
-Responsibilities:
+### 5.2 Python worker responsibilities
 
-- Accept a trusted job payload.
-- Download the uploaded source from object storage, or download a supported YouTube source.
-- Validate the actual audio file with `ffprobe`.
-- Decode audio into the format expected by the selected model.
-- Run GPU inference.
-- Reassemble chunked inference output using the model/library's overlap-add behavior.
-- Encode each stem into the selected output format.
-- Create a ZIP and a manifest.
-- Upload private result objects.
-- Report progress and terminal status to the web application.
-- Remove temporary local files in all success and failure paths.
+The Python worker is a long-running local process started by `start.sh`. It must:
 
-### 6.3 Database
+- Open the same SQLite database used by the web app.
+- Claim queued jobs safely.
+- Retrieve the source from the local job directory.
+- Validate the actual media with `ffprobe`.
+- Decode and canonicalize audio.
+- Load the configured Demucs model profile.
+- Run local CPU or GPU inference.
+- Encode and validate the selected output format.
+- Create individual stem files, a ZIP, and a manifest.
+- Update job progress and terminal state in SQLite.
+- Delete temporary files in success and failure paths.
+- Stop cooperatively when requested by `start.sh`.
 
-Use a managed Postgres database suitable for Vercel serverless access. Supabase is the selected provider; connect through its transaction pooler (port 6543) so serverless functions do not exhaust connections.
+The worker must not require a web callback to report progress. SQLite is the local
+source of truth for job state.
 
-The database stores metadata and state, not large audio files.
+### 5.3 SQLite
 
-### 6.4 Object storage
+SQLite stores metadata and state only. Audio bytes stay in the filesystem.
 
-Use private object storage with S3-compatible access and presigned URLs. Cloudflare R2 is the selected provider (zero egress fees for stem downloads; AWS S3 also works through the same adapter).
+Use a local database at:
 
-The storage abstraction must hide the provider from application code. It must support:
+```text
+data/stemify.sqlite3
+```
 
-- Presigned browser uploads.
-- Worker downloads.
-- Worker result uploads.
-- Short-lived signed downloads.
-- Object deletion.
-- Lifecycle expiration rules.
+The path must be configurable through `STEMIFY_DATA_DIR`, but the default must work
+without any external service.
 
-Do not make result objects public merely to simplify downloads.
+Configure SQLite for concurrent web/worker access:
 
-## 7. Repository Layout
+- Enable WAL mode.
+- Set a busy timeout.
+- Use short transactions.
+- Claim jobs with an atomic state transition.
+- Avoid holding a transaction while running model inference or encoding.
+- Enable foreign keys.
+- Use migrations from the beginning.
 
-Use one repository with independently deployable applications. This keeps contracts and documentation together while preserving separate deployment boundaries.
+### 5.4 Local filesystem storage
+
+Use a server-owned directory layout:
+
+```text
+data/
+├── stemify.sqlite3
+├── uploads/
+│   └── <upload-id>/
+│       └── input.<safe-extension>
+├── jobs/
+│   └── <job-id>/
+│       ├── temp/
+│       ├── masters/
+│       ├── outputs/
+│       └── manifest.json
+├── models/
+│   └── <model-profile>/<checkpoint>
+└── logs/
+    ├── web.log
+    └── worker.log
+```
+
+The application must create these directories at startup. `data/` must be ignored
+by Git and must never contain committed model weights or user audio.
+
+Filesystem rules:
+
+- Resolve every path and confirm it remains inside the expected root.
+- Use random server-generated IDs for directory names.
+- Never use the raw user filename as a path.
+- Sanitize names only for display and output filenames.
+- Use a unique temporary directory per job.
+- Do not expose absolute paths in API responses or logs visible to the user.
+- Delete abandoned temporary data through a local cleanup command.
+
+## 6. Repository Layout
 
 ```text
 /
 ├── apps/
-│   └── web/                         # Next.js app deployed to Vercel
+│   └── web/
 │       ├── app/
-│       │   ├── page.tsx             # Upload-first application screen
-│       │   ├── jobs/[jobId]/page.tsx # Job progress/result screen
+│       │   ├── page.tsx
+│       │   ├── jobs/[jobId]/page.tsx
 │       │   └── api/
-│       │       ├── uploads/presign/route.ts
+│       │       ├── uploads/route.ts
 │       │       ├── jobs/route.ts
 │       │       ├── jobs/[jobId]/route.ts
 │       │       ├── jobs/[jobId]/cancel/route.ts
-│       │       ├── jobs/[jobId]/downloads/route.ts
-│       │       └── internal/worker-events/route.ts
+│       │       ├── jobs/[jobId]/retry/route.ts
+│       │       └── jobs/[jobId]/downloads/route.ts
 │       ├── components/
 │       │   ├── upload-dropzone.tsx
 │       │   ├── source-picker.tsx
@@ -247,101 +296,108 @@ Use one repository with independently deployable applications. This keeps contra
 │       │   ├── stem-result-list.tsx
 │       │   ├── audio-preview.tsx
 │       │   └── error-state.tsx
+│       ├── hooks/
+│       │   └── use-job-polling.ts
 │       ├── lib/
-│       │   ├── db.ts
-│       │   ├── storage.ts
-│       │   ├── worker-client.ts
-│       │   ├── rate-limit.ts
-│       │   ├── validation.ts
-│       │   └── jobs.ts
-│       ├── drizzle/                  # Database migrations
-│       ├── public/
-│       ├── package.json
-│       └── next.config.ts
+│       │   ├── auth/
+│       │   ├── db/
+│       │   ├── jobs.ts
+│       │   ├── local-storage.ts
+│       │   ├── job-view.ts
+│       │   ├── limits.ts
+│       │   └── validation.ts
+│       ├── drizzle/
+│       └── package.json
 ├── worker/
-│   ├── app.py                        # Modal application entry point
-│   ├── pipeline.py                   # Orchestration of one job
-│   ├── input_audio.py                # Download, ffprobe, decode
-│   ├── separators/
-│   │   ├── base.py
-│   │   ├── vocal_instrumental.py
-│   │   └── full_stems.py
-│   ├── encoding.py                   # FFmpeg encoding and ZIP creation
-│   ├── storage.py                    # Object storage client
-│   ├── callbacks.py                  # Signed web application events
-│   ├── progress.py
+│   ├── worker/
+│   │   ├── cli.py
+│   │   ├── config.py
+│   │   ├── database.py
+│   │   ├── errors.py
+│   │   ├── input_audio.py
+│   │   ├── job_loop.py
+│   │   ├── pipeline.py
+│   │   ├── stages.py
+│   │   ├── encoding.py
+│   │   ├── packaging.py
+│   │   ├── models/
+│   │   │   ├── base.py
+│   │   │   ├── demucs.py
+│   │   │   └── profiles.py
+│   │   └── __init__.py
+│   ├── tests/
+│   ├── requirements.txt
+│   ├── requirements-dev.txt
 │   ├── pyproject.toml
-│   └── tests/
+│   └── README.md
 ├── packages/
 │   └── contracts/
-│       ├── job-events.schema.json
-│       ├── job-request.schema.json
-│       ├── output-manifest.schema.json
+│       ├── schemas/
+│       ├── tests/
 │       └── README.md
-├── docs/
-│   ├── architecture.md
-│   ├── operations.md
-│   ├── model-evaluation.md
-│   ├── privacy-and-content-policy.md
-│   └── launch-checklist.md
+├── data/                         # local runtime data, never committed
 ├── .env.example
+├── start.sh
+├── package.json
 ├── README.md
 └── STEM_EXTRACTOR_PLAN.md
 ```
 
-The exact ORM and component filenames may change. The separation between `apps/web`, `worker`, and `packages/contracts` should remain.
+The exact module names may change, but the separation between the web app, local
+worker, and shared contracts should remain.
 
-## 8. User Experience Specification
+## 7. User Experience Specification
 
-### 8.1 Home screen
+### 7.1 Home screen
 
 The initial screen must contain:
 
-- Product name.
-- A large drag-and-drop upload control.
-- A visible `Choose MP3` or `Choose audio file` action.
-- Supported file and size limits.
-- A secondary YouTube import option.
+- Stemify name and concise local-processing description.
+- Large drag-and-drop upload control.
+- Visible `Choose audio file` action.
+- Supported formats, size limit, and duration limit.
 - Separation mode control.
 - Output format control.
 - Primary `Separate audio` button.
-- Terms/content-rights acknowledgement near the action if required by legal review.
+- Optional `Import from YouTube` control after upload is working.
+- A local privacy notice explaining that files are processed on this computer.
 
-Do not show advanced infrastructure or model names to normal users. A small `Advanced` disclosure can expose model information later.
+Do not display cloud providers, deployment platforms, internal model names, or
+infrastructure details in the normal user flow.
 
-### 8.2 File selection states
+### 7.2 File states
 
 The upload control must support:
 
-- Empty state.
-- Drag-over state.
-- Selected file state.
-- Uploading state with byte progress.
-- Uploaded state.
-- Invalid file state.
-- File-too-large state.
-- Duration-too-long state.
-- Unsupported codec state.
-- Cancel/remove action before processing.
+- Empty.
+- Drag-over.
+- Selected.
+- Uploading to the local web process.
+- Uploaded and ready to process.
+- Invalid type.
+- Too large.
+- Too long.
+- Undecodable.
+- Upload failure.
+- Remove/cancel.
 
-The UI must validate client-side for fast feedback but treat all server-side validation as authoritative.
+Client validation is for fast feedback only. Server and worker validation remain
+authoritative.
 
-### 8.3 Processing screen
+### 7.3 Processing screen
 
-After job creation, navigate to `/jobs/{app_job_id}`.
-
-Show:
+After job creation, navigate to `/jobs/{jobId}` and show:
 
 - Source filename.
-- Selected mode.
-- Selected output format.
-- Current stage.
-- Progress indicator.
-- Approximate status text.
-- Cancel action where cancellation is supported.
-- A safe browser-refresh/recovery path.
+- Selected mode and output format.
+- Current user-facing stage.
+- Progress or an indeterminate state when exact progress is unavailable.
+- Cancel action.
+- Refresh-safe recovery.
+- A clear note that processing continues while the page is open or refreshed, as
+  long as the local worker process remains running.
 
-Stages shown to the user should be simple:
+Stages shown to users:
 
 1. Preparing audio.
 2. Analyzing track.
@@ -349,175 +405,227 @@ Stages shown to the user should be simple:
 4. Encoding files.
 5. Preparing downloads.
 
-Do not expose raw stack traces, internal IDs, storage keys, or provider errors.
-
-### 8.4 Results screen
+### 7.4 Results screen
 
 Show:
 
 - Completed status.
-- Stem list with human-readable names.
+- Human-readable stem names.
 - Native audio preview controls.
 - Individual download buttons.
 - `Download all` ZIP button.
-- Output format and expiration time.
+- Output format.
+- Local file location only if explicitly useful and safe; never expose arbitrary
+  filesystem paths by default.
 - Retry action that creates a new job.
-- Copyable result link if guest job recovery supports it.
+- Cleanup/retention information.
 
-The browser must request short-lived signed download URLs only when the user asks to download or preview a file.
+The download route must verify ownership before reading any result file.
 
-### 8.5 Failure screen
+### 7.5 Failure screen
 
 Every failure must provide:
 
 - Plain-language explanation.
-- Whether retrying is likely to help.
-- A retry action when safe.
-- A support/reference code.
-- No secret values or raw worker output.
+- Whether retrying may help.
+- Retry action when safe.
+- Short reference code.
+- No raw traceback, absolute path, secret, or model internals.
 
-Examples:
+Useful error categories include invalid audio, unsupported duration, missing model
+weights, insufficient memory, FFmpeg failure, canceled job, and worker unavailable.
 
-- The file is not a supported audio file.
-- The track is longer than the current limit.
-- The source could not be downloaded.
-- The processing service is busy.
-- The job exceeded the time limit.
-- The files expired.
-
-### 8.6 Responsive and accessibility requirements
+### 7.6 Accessibility
 
 - Keyboard-accessible file selection and controls.
 - Visible focus states.
 - Labels associated with every form control.
 - Status updates announced through an appropriate live region.
 - No color-only status communication.
-- Sufficient contrast in light and dark themes if both are offered.
-- Touch-friendly controls on mobile.
+- Touch-friendly controls.
 - Audio controls usable without hover.
-- Layout must not shift when progress text or filenames change.
+- Reduced-motion support.
+- Layout space reserved for changing filenames and status text.
 
-Use shadcn/ui primitives and the existing Tailwind design system once the web app is scaffolded. Keep the visual style restrained and tool-oriented rather than turning the product into a decorative marketing page.
-
-## 9. Supported Inputs and Limits
+## 8. Supported Inputs and Limits
 
 Initial recommended limits:
 
 - Accepted source types: MP3, WAV, FLAC, OGG, M4A.
-- Initial advertised focus: MP3 upload.
-- Maximum file size: choose a value based on storage and worker memory testing, initially 100 MB.
-- Maximum duration: initially 8 minutes for the default mode and 6 minutes for full stems if benchmarks require it.
-- Maximum concurrent guest jobs per IP: 1 or 2.
-- Maximum daily guest jobs per IP: define a conservative value before public launch.
-- Maximum YouTube source duration: same policy as uploads.
-- Maximum source sample rate/channels: normalize supported values in preprocessing.
+- Maximum file size: 100 MB initially.
+- Maximum duration: 8 minutes for vocals/instrumental.
+- Maximum duration: 6 minutes for full stems until benchmarks justify more.
+- Channels: mono or stereo input; normalize to the model's expected layout.
+- Maximum temporary disk usage: configurable and checked before processing.
+- Maximum output budget: configurable based on selected format and duration.
 
-These are configuration values, not magic constants. Store them in server-side configuration and expose a sanitized subset to the UI.
+These values are configuration, not scattered constants. The same effective policy
+must be used by the client, web server, and worker, with worker validation as the
+final authority.
 
-Before launch, run real benchmarks and adjust the limits. Do not claim the five-minute target until the limit is backed by measured results.
+Use environment variables or a validated local config file:
 
-## 10. Detailed End-to-End Flows
+```text
+MAX_UPLOAD_BYTES=104857600
+MAX_DURATION_SECONDS=480
+MAX_FULL_STEMS_DURATION_SECONDS=360
+JOB_RETENTION_HOURS=24
+MAX_ACTIVE_JOBS=1
+```
 
-### 10.1 Upload flow
+The local application may allow a larger limit through configuration, but the UI
+must display the active limits and the worker must enforce them.
+
+## 9. Local End-to-End Flows
+
+### 9.1 Startup flow
+
+1. User runs `./start.sh` from the repository root.
+2. The script verifies Bash, Node/npm, Python, FFmpeg, and FFprobe.
+3. The script verifies that web dependencies are installed.
+4. The script verifies that Python runtime dependencies are installed.
+5. The script creates the local data directories.
+6. The script runs a database migration or confirms the SQLite schema is current.
+7. The script checks that the configured model profile and checkpoint are available,
+   or prints exact instructions to prepare them.
+8. The script starts the Next.js process.
+9. The script starts the Python worker process.
+10. The script prints the local URL and process/log locations.
+11. A trap terminates both child processes when the script exits.
+
+`start.sh` must not silently install packages or modify global environments. If a
+prerequisite is missing, it should stop and explain how to install or activate it.
+
+### 9.2 Upload flow
 
 1. Browser selects an audio file.
-2. Browser checks extension, MIME hint, and local size.
-3. Browser calls `POST /api/uploads/presign` with filename, size, MIME type, and a client-generated upload token.
-4. Web server validates file size/type policy and returns a presigned object-storage upload URL plus an object key.
-5. Browser uploads directly to object storage with a progress bar.
-6. Browser calls `POST /api/jobs` with the object key, source metadata, separation mode, output format, and an idempotency key.
-7. Web server verifies that the object exists and belongs to the current upload session.
-8. Web server creates the application job in Postgres with status `queued`.
-9. Web server calls the Modal launch endpoint with the app job ID and signed source reference.
-10. Web server stores the returned worker call reference and returns the app job ID.
-11. Browser navigates to the job page and begins polling.
+2. Browser performs extension, MIME-hint, and size checks.
+3. Browser sends the file to `POST /api/uploads` as multipart form data.
+4. The web server enforces request size and filename limits.
+5. The server generates an upload ID and writes bytes to a server-owned upload
+   directory.
+6. The server returns upload metadata, never an absolute path.
+7. The browser selects mode and output format.
+8. Browser sends `POST /api/jobs` with the upload ID and options.
+9. The server verifies the upload belongs to the local session and still exists.
+10. The server creates one queued SQLite job using the idempotency key.
+11. The worker notices the queued job and claims it atomically.
+12. The browser navigates to the job page and polls local status.
 
-The web server must never accept an arbitrary object key from an untrusted request. Object keys should contain a server-generated upload token or random identifier.
+Unlike the old cloud plan, the browser does not receive a presigned storage URL and
+large audio does not leave the local machine through a third-party service.
 
-### 10.2 YouTube flow
+### 9.3 Worker flow
 
-1. User opens the `Import from YouTube` control.
-2. Browser sends the URL to the server for validation.
-3. Server accepts only supported hostnames such as `youtube.com`, `www.youtube.com`, and `youtu.be` after URL parsing.
-4. Server creates a queued job without pretending that the remote media has already been validated.
-5. Modal worker downloads the source with `yt-dlp`.
-6. Worker validates duration and actual media information with `ffprobe`.
-7. If limits are exceeded, the worker reports a structured failure and does not proceed to GPU inference.
-8. The rest of the pipeline matches the upload flow.
+1. Worker claims a queued job.
+2. Worker records `processing` and `starting`.
+3. Worker creates a unique job temp directory.
+4. Worker retrieves the local uploaded source.
+5. Worker runs `ffprobe` and validates actual media properties.
+6. Worker decodes to the canonical model representation.
+7. Worker loads or reuses the configured Demucs model.
+8. Worker performs chunked or library-supported inference.
+9. Worker validates stem shapes, values, timing, and peaks.
+10. Worker writes temporary master files.
+11. Worker encodes the requested output format.
+12. Worker validates every encoded output with `ffprobe`.
+13. Worker writes a manifest and ZIP archive.
+14. Worker moves only complete artifacts into the job output directory.
+15. Worker updates SQLite with output metadata and marks the job completed.
+16. Worker removes temporary files in a `finally` path.
 
-The service must not bypass DRM, private access controls, age gates, or other access restrictions. Legal review must confirm the YouTube workflow and user-facing terms before enabling it publicly.
+If a failure occurs, the worker records a stable error code, removes partial output,
+marks the job failed or canceled, and continues processing future jobs.
 
-### 10.3 Polling flow
+### 9.4 Polling flow
 
-1. Browser calls `GET /api/jobs/{app_job_id}` every 2 to 3 seconds while the job is active.
-2. Server authenticates the request using the signed guest ID cookie (httpOnly, HMAC) plus the per-job access token; account ownership replaces both once accounts exist.
-3. Server returns sanitized status and progress.
-4. On completion, server returns output metadata but not permanent public URLs.
-5. Browser requests signed downloads when needed.
-6. Polling stops on `completed`, `failed`, `canceled`, or `expired`.
+1. Browser calls `GET /api/jobs/{jobId}` every 2–3 seconds while active.
+2. The server verifies the local session owner.
+3. The server returns sanitized status and progress.
+4. The browser stops polling at `completed`, `failed`, `canceled`, `expired`, or
+   `worker_unavailable`.
+5. The browser backs off after repeated unchanged responses.
+6. The browser pauses polling while hidden and resumes when visible.
+7. Refreshing the job URL recovers the current state from SQLite.
 
-Add exponential backoff after repeated unchanged responses and stop polling when the page is hidden if appropriate. Resume polling when the user returns.
+### 9.5 Cancellation flow
 
-### 10.4 Worker callback flow
+1. Browser sends `POST /api/jobs/{jobId}/cancel`.
+2. The server verifies ownership.
+3. A queued job is marked canceled immediately.
+4. A processing job receives a cancellation request in SQLite.
+5. The worker checks cancellation between stages and inference chunks.
+6. The worker stops at the next safe boundary.
+7. Partial outputs are removed.
+8. The final state is `canceled`, never `completed`.
 
-1. Modal worker emits `started` after accepting the job.
-2. Worker emits progress updates at stage boundaries and safe intervals.
-3. Worker uploads results.
-4. Worker emits `completed` with an output manifest, object keys, sizes, checksums, and expiry.
-5. On failure, worker emits `failed` with a stable public error code and an internal diagnostic reference.
-6. Vercel validates the callback signature, event ID, job ID, and allowed state transition.
-7. Vercel updates the database transactionally.
-8. Duplicate callbacks are ignored using the unique event ID.
+### 9.6 Optional YouTube flow
 
-## 11. API Contract
+YouTube support is local but not offline:
 
-All web API responses should be JSON with consistent error shapes.
+1. User opens the secondary YouTube input.
+2. The web server parses the URL with a real URL parser.
+3. Only approved YouTube hostnames are accepted.
+4. A queued job stores the validated source metadata.
+5. The local worker downloads the source with controlled `yt-dlp` arguments.
+6. The worker applies download timeout, size, duration, and media validation.
+7. The worker continues through the same local Demucs pipeline.
 
-### 11.1 `POST /api/uploads/presign`
+Do not accept arbitrary downloader options or arbitrary remote URLs. Do not bypass
+DRM, private access controls, age gates, or other restrictions. Keep this feature
+disabled until the local upload flow is stable and policy review is complete.
 
-Purpose: create a short-lived direct-upload URL.
+## 10. Local API Contract
 
-Request:
+All API responses use JSON except authorized download responses. Errors use one
+consistent shape:
 
 ```json
 {
-  "filename": "song.mp3",
-  "contentType": "audio/mpeg",
-  "sizeBytes": 7340032
+  "error": "invalid_request",
+  "message": "The selected file is not supported.",
+  "reference": "ref_..."
 }
 ```
+
+The `message` is optional and must never contain secrets, stack traces, or absolute
+paths.
+
+### 10.1 `POST /api/uploads`
+
+Accept a multipart form upload named `file`.
 
 Response:
 
 ```json
 {
   "uploadId": "upl_...",
-  "objectKey": "sources/upl_.../input.mp3",
-  "uploadUrl": "https://storage.example/...",
-  "expiresInSeconds": 900
+  "filename": "song.mp3",
+  "sizeBytes": 7340032,
+  "status": "uploaded"
 }
 ```
 
 Rules:
 
-- Never trust the client-provided content type.
-- Limit URL lifetime.
-- Limit object key lifetime and ownership.
-- Reject files exceeding configured size limits.
-- Rate-limit presign requests.
+- Enforce request size before writing unbounded data.
+- Validate the filename length and extension.
+- Treat MIME type as a hint only.
+- Generate the server-owned upload ID.
+- Write only under `data/uploads/{uploadId}/`.
+- Do not return the local filesystem path.
+- Bind the upload to the signed local session.
+- Delete abandoned uploads during cleanup.
 
-### 11.2 `POST /api/jobs`
+### 10.2 `POST /api/jobs`
 
-Purpose: create an application job and start worker processing.
-
-Upload request:
+Request:
 
 ```json
 {
   "source": {
     "type": "upload",
     "uploadId": "upl_...",
-    "objectKey": "sources/upl_.../input.mp3",
     "filename": "song.mp3"
   },
   "mode": "vocals_instrumental",
@@ -526,19 +634,8 @@ Upload request:
 }
 ```
 
-YouTube request:
-
-```json
-{
-  "source": {
-    "type": "youtube",
-    "url": "https://www.youtube.com/watch?v=..."
-  },
-  "mode": "vocals_instrumental",
-  "outputFormat": "mp3",
-  "idempotencyKey": "client-generated-random-value"
-}
-```
+The server validates mode and format allowlists, upload ownership, source
+existence, active-job limits, and idempotency. It creates a queued SQLite record.
 
 Response:
 
@@ -550,23 +647,18 @@ Response:
 }
 ```
 
-Rules:
+The route must not wait for Demucs inference.
 
-- Validate mode and format against allowlists.
-- Verify upload ownership and object existence.
-- Create or return the existing job for a repeated idempotency key.
-- Enforce quota before starting a worker.
-- Never expose the Modal call ID.
+### 10.3 `GET /api/jobs/{jobId}`
 
-### 11.3 `GET /api/jobs/{jobId}`
-
-Response while running:
+Running response:
 
 ```json
 {
   "jobId": "job_...",
   "status": "processing",
   "stage": "separating",
+  "userStage": "Separating stems",
   "progress": 54,
   "source": { "filename": "song.mp3" },
   "mode": "vocals_instrumental",
@@ -576,17 +668,10 @@ Response while running:
 }
 ```
 
-Response when complete:
+Completed response adds:
 
 ```json
 {
-  "jobId": "job_...",
-  "status": "completed",
-  "stage": "completed",
-  "progress": 100,
-  "source": { "filename": "song.mp3" },
-  "mode": "vocals_instrumental",
-  "outputFormat": "mp3",
   "stems": [
     { "id": "vocals", "label": "Vocals", "durationSeconds": 214.2 },
     { "id": "instrumental", "label": "Instrumental", "durationSeconds": 214.2 }
@@ -596,65 +681,45 @@ Response when complete:
 }
 ```
 
-The response should not include storage credentials, internal object keys, or unrestricted URLs.
+Failed response adds a stable `errorCode` and sanitized public error message.
+Never include object keys, absolute paths, worker process IDs, or tracebacks.
 
-### 11.4 `POST /api/jobs/{jobId}/cancel`
+### 10.4 `POST /api/jobs/{jobId}/cancel`
 
-Purpose: request cancellation.
+Request cancellation as described in the cancellation flow. The endpoint is
+idempotent for already canceled jobs and rejects cancellation of completed or
+expired jobs with a clear response.
 
-Cancellation is cooperative. If the worker cannot cancel a running GPU call immediately, the job is marked `cancel_requested` and the worker stops at the next safe boundary. The result must not be exposed as completed if the user canceled it.
+### 10.5 `POST /api/jobs/{jobId}/retry`
 
-### 11.5 `GET /api/jobs/{jobId}/downloads`
+Create a new job from the same source and options after verifying ownership and
+that the source is still available. Do not mutate the completed or failed job into
+a new attempt; each retry receives a new job ID and idempotency key.
+
+### 10.6 `GET /api/jobs/{jobId}/downloads`
 
 Query parameters:
 
 - `kind=zip`
 - `kind=stem&stem=vocals`
 
-The endpoint verifies ownership, checks job state and expiry, then returns a short-lived signed redirect or JSON URL. It must not stream large files through the Vercel function unless there is a specific reason to do so.
+The endpoint verifies session ownership, terminal state, output existence, and
+expiry before streaming the file or returning a local redirect. It must reject
+path-like user input and resolve files from stored output metadata rather than
+constructing paths directly from a request string.
 
-### 11.6 `POST /api/internal/worker-events`
+## 11. Local Database Model
 
-This endpoint is not public application functionality.
+Use migrations from the beginning. The initial SQLite schema should contain:
 
-Headers:
+### 11.1 `jobs`
 
-- `X-Worker-Event-Id`
-- `X-Worker-Timestamp`
-- `X-Worker-Signature`
-
-Payload:
-
-```json
-{
-  "jobId": "job_...",
-  "eventId": "evt_...",
-  "status": "processing",
-  "stage": "encoding",
-  "progress": 82,
-  "workerCallId": "internal-reference",
-  "outputs": [],
-  "error": null
-}
-```
-
-Validate an HMAC signature over the timestamp and raw request body. Reject stale timestamps, invalid signatures, unknown jobs, and impossible state transitions.
-
-## 12. Database Model
-
-Use migrations from the start. Do not create production tables manually without a migration file.
-
-### 12.1 `jobs`
-
-Suggested fields:
-
-- `id`: public application job ID, random and non-sequential.
-- `access_token_hash`: hash of guest access token if guest recovery is supported.
-- `owner_user_id`: nullable until accounts exist.
+- `id`: random public job ID.
+- `owner_key`: hash or signed-session owner identifier.
 - `source_type`: `upload` or `youtube`.
 - `source_filename`: sanitized display name.
-- `source_object_key`: private storage key for uploads.
-- `source_url`: YouTube URL metadata, stored only as required for support and covered by the privacy policy.
+- `source_path`: server-owned relative path, never an absolute path.
+- `source_url`: optional YouTube metadata, only when enabled.
 - `source_duration_seconds`.
 - `source_size_bytes`.
 - `source_sha256`.
@@ -663,8 +728,8 @@ Suggested fields:
 - `status`.
 - `stage`.
 - `progress`.
-- `worker_call_id`.
-- `idempotency_key_hash`.
+- `cancel_requested`.
+- `attempt_count`.
 - `error_code`.
 - `error_message_public`.
 - `diagnostic_reference`.
@@ -674,22 +739,24 @@ Suggested fields:
 - `expires_at`.
 - `updated_at`.
 
-Indexes:
+Recommended statuses:
 
-- Unique owner/session + idempotency key hash where appropriate.
-- `status` and `created_at` for operational queries.
-- `expires_at` for cleanup.
-- `worker_call_id` for diagnostics, never for public lookup.
+```text
+queued
+processing
+completed
+failed
+canceled
+expired
+```
 
-### 12.2 `job_outputs`
-
-Suggested fields:
+### 11.2 `job_outputs`
 
 - `id`.
 - `job_id`.
-- `stem_key`: `vocals`, `instrumental`, `drums`, `bass`, `other`, etc.
+- `stem_key`.
 - `label`.
-- `object_key`.
+- `relative_path`.
 - `mime_type`.
 - `size_bytes`.
 - `duration_seconds`.
@@ -697,2218 +764,50 @@ Suggested fields:
 - `created_at`.
 - `expires_at`.
 
-### 12.3 `worker_events`
+Store the ZIP as a job output with a reserved kind, or add a dedicated `job_archives`
+table if that is clearer. The web API must use stored metadata for file lookup.
 
-Suggested fields:
+### 11.3 `job_events`
 
-- `event_id` unique.
-- `job_id`.
-- `event_type`.
-- `payload_hash`.
-- `received_at`.
-
-This table makes callbacks idempotent and auditable.
-
-### 12.4 `usage_events`
-
-Use this for rate limits, cost accounting, and future billing:
+A local audit table is optional but recommended:
 
 - `id`.
 - `job_id`.
-- `actor_key_hash`.
 - `event_type`.
-- `mode`.
-- `duration_seconds`.
-- `gpu_seconds` if available.
+- `stage`.
+- `progress`.
+- `payload_hash` or sanitized detail.
 - `created_at`.
 
-Do not store raw IP addresses longer than privacy requirements allow. Hash or rotate identifiers according to the privacy policy.
+This is a local replacement for remote worker callback event storage. It is not a
+webhook receiver and must not contain raw audio or secrets.
 
-## 13. Worker Implementation
-
-### 13.1 Modal application
-
-The worker is a separate Python application deployed with the Modal CLI.
-
-It should include:
-
-- A pinned Python version.
-- A pinned Modal SDK version.
-- A Debian/Ubuntu-based image with FFmpeg including `libmp3lame` and `libvorbis`; use the native AAC encoder and avoid nonfree `libfdk_aac`.
-- PyTorch and the selected CUDA-compatible runtime.
-- The separation libraries and model adapters.
-- `yt-dlp` only if YouTube mode is enabled.
-- An S3-compatible storage client.
-- HTTP client support for callbacks.
-- A persistent Modal volume for validated model weights.
-
-Do not copy model weights into the Git repository.
-
-### 13.2 Worker entrypoint behavior
-
-The public Modal endpoint should accept a short request and return an accepted response quickly. It must not keep the Vercel request open for the full extraction.
-
-The endpoint should:
-
-1. Authenticate the launch request.
-2. Validate the job payload.
-3. Start or enqueue the background Modal function.
-4. Return the internal worker call ID and accepted status to the web app.
-
-The background function should perform the long-running work.
-
-Use the current Modal SDK's documented async invocation mechanism. Do not rely on an unverified assumption about a particular SDK method or exception name; pin and test the SDK version in CI.
-
-### 13.3 Model loading and caching
-
-Load models once per warm GPU container where supported:
-
-- Store model checkpoints in a persistent Modal volume.
-- Load the selected model during container initialization.
-- Move it to the GPU once.
-- Set evaluation mode.
-- Use inference-only execution.
-- Record model name, version, commit/checksum, and runtime settings in job diagnostics.
-
-If multiple models consume too much GPU memory, use separate worker classes or separate model images so one container does not load every model simultaneously.
-
-### 13.4 Separation adapter contract
-
-Each model adapter should implement the same conceptual interface:
-
-```text
-validate_mode(mode)
-load_model()
-separate(input_waveform) -> map of stem name to waveform
-model_metadata() -> name, version, license, expected stems
-```
-
-The rest of the worker must not know model-specific tensor details.
-
-### 13.5 Model candidates
-
-Evaluate current open-source candidates before selecting production defaults. The initial shortlist should include:
-
-- Meta Demucs / HTDemucs family for multi-source separation.
-- BS-RoFormer or a current, maintained RoFormer implementation for vocal/instrumental separation.
-- Other actively maintained source-separation implementations only if their licenses, weights, and runtime behavior are suitable.
-
-The plan must not assume that the newest repository, model name, or online demo is automatically the best production choice.
-
-Selection criteria:
-
-- Separation quality on representative genres.
-- Vocal bleed and instrumental artifacts.
-- Runtime on the target GPU.
-- Peak VRAM use.
-- Model license and commercial-use compatibility.
-- Maintenance and reproducibility.
-- Compatibility with Python, CUDA, and FFmpeg pipeline.
-- Failure behavior on mono, stereo, clipped, quiet, and corrupted inputs.
-
-### 13.6 Audio preprocessing
-
-The worker must:
-
-1. Download or retrieve the input to a temporary directory.
-2. Run `ffprobe` and parse structured output.
-3. Verify the file is actually audio.
-4. Enforce size, duration, channels, and sample-rate limits.
-5. Decode using a trusted library or FFmpeg.
-6. Convert to the model's expected sample rate and channel layout.
-7. Preserve the source duration and timing metadata.
-8. Avoid destructive normalization unless the selected model requires it.
-9. Reject empty, silent, corrupt, or unsupported input according to policy.
-
-Use subprocess argument arrays, never shell interpolation of user input.
-
-### 13.7 Inference
-
-The separation stage should use the selected library's tested inference path, including its chunking and overlap-add implementation.
-
-Conceptually:
-
-```text
-input audio
-  -> waveform tensor
-  -> fixed inference windows
-  -> GPU model inference
-  -> overlapping windows reassembled
-  -> one waveform per stem
-```
-
-Do not implement custom chunk stitching until there is a measured reason. A bad overlap-add implementation can create audible seams.
-
-Inference requirements:
-
-- Use `no_grad` or the framework equivalent.
-- Use mixed precision only after quality tests verify it does not create unacceptable artifacts.
-- Track inference duration and peak memory.
-- Check tensor shape and sample count for every output stem.
-- Detect NaN, infinity, or unexpected clipping before encoding.
-- Preserve a deterministic seed only if the selected model uses randomness.
-
-### 13.8 Output encoding
-
-Encode from the separated waveform or a high-quality temporary WAV master.
-
-Initial settings should be documented and tested:
-
-- MP3: LAME, high quality or configured target bitrate.
-- WAV: PCM, documented bit depth and sample rate.
-- FLAC: lossless, moderate compression level.
-- OGG: Vorbis quality setting or a documented Opus policy.
-- M4A: AAC with a documented bitrate.
-
-The encoder must preserve stem duration. Verify output with `ffprobe` after encoding.
-
-Do not imply that WAV or FLAC restores quality lost in the original MP3.
-
-### 13.9 Packaging
-
-Create:
-
-- Individual stem objects for preview/download.
-- One ZIP containing the selected-format stems.
-- A `manifest.json` inside the ZIP containing job metadata, mode, model version, format, durations, and checksums.
-
-Do not include secrets, internal storage keys, or user access tokens in the manifest.
-
-### 13.10 Temporary file cleanup
-
-Use a unique per-job temporary directory. Cleanup must run in a `finally` path even when model inference, encoding, upload, or callback fails.
-
-The worker must never reuse a previous job's temporary directory.
-
-## 14. Progress Reporting
-
-Progress should be stage-based rather than pretending to know exact model progress when it is not available.
-
-Suggested mapping:
-
-- `queued`: 0
-- `downloading`: 10 to 20
-- `validating`: 20 to 25
-- `separating`: 25 to 75
-- `encoding`: 75 to 90
-- `uploading_results`: 90 to 98
-- `completed`: 100
-
-The `downloading` range applies only to YouTube sources; upload jobs begin at `validating`.
-
-If the model library provides reliable chunk progress, use it within the separation range. Otherwise, emit stage progress and an indeterminate visual indicator.
-
-Throttle callbacks so a job does not create excessive database writes. A progress update every 2 to 5 seconds or at meaningful stage transitions is sufficient.
-
-## 15. Security Requirements
-
-### 15.1 Web security
-
-- Keep all secrets server-side.
-- Use secure, HTTP-only cookies if sessions are introduced.
-- Configure CSRF protection where cookie-authenticated mutation routes need it.
-- Validate JSON payload sizes.
-- Add security headers.
-- Avoid reflecting arbitrary filenames or URLs into HTML without escaping.
-- Use randomized public IDs.
-- Do not expose database IDs, storage credentials, or Modal references.
-
-### 15.2 Upload security
-
-- Validate size before presigning.
-- Validate actual content after upload.
-- Use private object storage.
-- Generate server-owned object keys.
-- Restrict object prefixes and upload expiry.
-- Delete abandoned uploads.
-- Never execute uploaded files.
-- Run `ffprobe` with bounded resource usage.
-
-### 15.3 YouTube security
-
-- Parse URLs with a real URL parser.
-- Allow only approved hostnames.
-- Do not accept arbitrary downloader options from users.
-- Do not support private, DRM-protected, or access-controlled media.
-- Apply download timeouts and size limits.
-- Keep `yt-dlp` updated and pinned through controlled dependency updates.
-- Review terms of service and copyright policy before launch.
-
-### 15.4 Worker callback security
-
-- Use HMAC signatures with timestamp replay protection.
-- Use a separate launch secret and callback secret.
-- Validate event IDs for idempotency.
-- Reject callbacks for expired or terminal jobs unless they are safe no-op duplicates.
-- Use TLS-only URLs.
-
-### 15.5 Abuse controls
-
-- Per-IP rate limits.
-- Per-session job limits.
-- Maximum active jobs per actor.
-- Maximum total input duration per day for guests.
-- Queue concurrency caps.
-- CAPTCHA or account requirement if abuse becomes significant.
-- Administrative kill switch to disable YouTube mode or new jobs.
-
-## 16. Privacy and Content Policy
-
-Before public launch, publish:
-
-- Privacy policy.
-- Terms of service.
-- Content and copyright policy.
-- File retention policy.
-- Contact/support method.
-
-The product should clearly state:
-
-- Users must have permission to process uploaded or linked audio.
-- Uploaded files and generated outputs are private by default.
-- Files are deleted automatically after the stated retention window.
-- The service may retain minimal diagnostic metadata for reliability and abuse prevention.
-- Model providers and infrastructure subprocessors may process data as required to operate the service.
-
-Do not retain audio indefinitely by default.
-
-## 17. Environment Configuration
-
-Use separate values for local, preview/staging, and production.
-
-### 17.1 Web environment variables
-
-```text
-DATABASE_URL=
-APP_URL=
-
-STORAGE_ENDPOINT=
-STORAGE_REGION=
-STORAGE_BUCKET=
-STORAGE_ACCESS_KEY_ID=
-STORAGE_SECRET_ACCESS_KEY=
-
-WORKER_LAUNCH_URL=
-WORKER_LAUNCH_SECRET=
-WORKER_CALLBACK_SECRET=
-
-JOB_ACCESS_TOKEN_SECRET=
-UPLOAD_SIGNING_SECRET=
-
-MAX_UPLOAD_BYTES=104857600
-MAX_DURATION_SECONDS=480
-JOB_RETENTION_HOURS=24
-```
-
-Rate limiting uses Postgres-backed counters at MVP; add a separate provider only if the database becomes a bottleneck.
-
-### 17.2 Modal environment variables
-
-```text
-STORAGE_ENDPOINT=
-STORAGE_REGION=
-STORAGE_BUCKET=
-STORAGE_ACCESS_KEY_ID=
-STORAGE_SECRET_ACCESS_KEY=
-
-WEB_CALLBACK_URL=
-WORKER_CALLBACK_SECRET=
-WORKER_LAUNCH_SECRET=
-
-MODEL_CACHE_VOLUME=
-MODEL_VERSION=
-```
-
-Use Modal Secrets or the platform's secret manager. Never commit these values.
-
-### 17.3 Local environment
-
-Commit `.env.example` with names and descriptions, never values. Add validation that fails clearly when required production variables are missing.
-
-## 18. Deployment Architecture
-
-### 18.1 Vercel deployment
-
-- Connect the repository to a Vercel project.
-- Set the web project root to `apps/web` if required by the chosen monorepo configuration.
-- Configure build and install commands.
-- Add preview and production environment variables separately.
-- Run database migrations in a controlled deployment step, not on every request.
-- Configure the production domain.
-- Confirm that large uploads go directly to object storage rather than through Vercel.
-
-### 18.2 Modal deployment
-
-- Authenticate the Modal CLI locally or through CI.
-- Build the pinned worker image.
-- Create or reuse the model-cache volume.
-- Deploy the Modal app from the `worker` directory.
-- Configure secrets in Modal.
-- Verify the launch endpoint and callback path in staging.
-- Set GPU type, timeout, concurrency, and scaledown behavior based on benchmarks.
-- Keep a rollback deployment or previously validated model image available.
-
-The worker and web app are independently deployable. A web UI deployment must not rebuild the GPU image, and a model deployment must not require a web UI deployment unless the API contract changes.
-
-### 18.3 Deployment order
-
-1. Create production object storage bucket and private lifecycle rules.
-2. Create staging and production databases.
-3. Apply database migrations.
-4. Deploy the web app with worker launch disabled or in maintenance mode.
-5. Deploy the Modal worker and run a staging smoke test.
-6. Set the production worker URL and secrets in Vercel.
-7. Enable production processing.
-8. Run an end-to-end production smoke test with a non-sensitive fixture.
-9. Monitor logs and latency before announcing the URL.
-
-### 18.4 CI/CD
-
-Every pull request should run:
-
-- Web lint.
-- Web typecheck.
-- Web unit tests.
-- Worker formatting/lint/type checks.
-- Worker unit tests.
-- Contract schema validation.
-- Build validation.
-
-Protected branches should require CI success. Production Modal deployment should be a deliberate workflow, not an accidental deploy from every frontend change.
-
-## 19. Testing Strategy
-
-### 19.1 Web unit tests
-
-Cover:
-
-- File policy validation.
-- YouTube URL allowlist validation.
-- Mode and format validation.
-- Job state transition rules.
-- Callback signature verification.
-- Callback replay/idempotency behavior.
-- Public error mapping.
-- Signed download authorization.
-- Quota calculations.
-
-### 19.2 API integration tests
-
-Cover:
-
-- Presign request creation.
-- Job creation for upload source.
-- Job creation for YouTube source.
-- Repeated idempotency key behavior.
-- Missing or unauthorized job access.
-- Worker launch failure.
-- Callback updates and duplicate callback handling.
-- Expired job behavior.
-- Cancellation behavior.
-
-Use a test database and fake storage/worker adapters. Do not call a paid GPU for every pull request.
-
-### 19.3 Worker unit tests
-
-Cover:
-
-- Input validation from `ffprobe` output.
-- Duration and size rejection.
-- Safe filename conversion.
-- Mode-to-adapter mapping.
-- Output filename generation.
-- FFmpeg command construction.
-- ZIP manifest construction.
-- Callback signing.
-- Cleanup on all failure paths.
-- Invalid tensor and clipping detection.
-
-### 19.4 Worker integration tests
-
-Use a short fixture track whose redistribution is allowed.
-
-Verify:
-
-- Source download or object retrieval.
-- Decode.
-- Model loading.
-- Separation output stem names.
-- Duration alignment.
-- Encoding for each supported format.
-- Upload and callback.
-- Result manifest checksums.
-
-Run GPU integration tests as a scheduled Modal function (GitHub-hosted CI has no GPU) and before worker releases, rather than on every web-only change.
-
-### 19.5 End-to-end tests
-
-Use a staging deployment and fixture audio:
-
-1. Visit the home page.
-2. Upload the fixture.
-3. Select a mode and format.
-4. Start a job.
-5. Observe processing status.
-6. Wait for completion.
-7. Play or download each result.
-8. Confirm files can be decoded and have expected duration.
-9. Confirm expired links no longer work after the retention policy test.
-
-### 19.6 Performance tests
-
-Benchmark at least:
-
-- 30-second track.
-- 3-minute track.
-- Maximum supported track.
-- Mono and stereo source.
-- MP3 and lossless source.
-- Cold worker start.
-- Warm worker run.
-- One job and multiple queued jobs.
-
-Record:
-
-- Upload time.
-- Queue delay.
-- Worker startup time.
-- Download time.
-- Decode time.
-- Inference time.
-- Encoding time.
-- Upload time.
-- Total user-visible time.
-- Peak RAM and VRAM.
-- Failure rate.
-
-The launch target should be defined from these measurements, such as p90 completion under five minutes for supported tracks under normal queue capacity.
-
-### 19.7 Accessibility testing
-
-- Keyboard-only flow.
-- Screen-reader upload and status flow.
-- Reduced-motion mode.
-- Mobile viewport.
-- High zoom.
-- Focus recovery after navigation.
-- Error announcement.
-
-## 20. Model Evaluation Plan
-
-Before locking the production model:
-
-1. Select representative, legally usable evaluation tracks across genres.
-2. Include dense mixes, sparse mixes, live-like audio, stereo width, backing vocals, and percussion-heavy tracks.
-3. Run candidate models with the same input preprocessing.
-4. Compare objective metrics where ground truth exists.
-5. Perform blind listening tests for vocal bleed, musical artifacts, and transient damage.
-6. Record GPU time and memory.
-7. Check model and weights licenses for commercial deployment.
-8. Pin the selected repository commit, package versions, and checkpoint checksum.
-9. Store evaluation results in `docs/model-evaluation.md`.
-
-Production output should include model metadata in the internal job record so quality regressions can be traced to model changes.
-
-## 21. Observability and Operations
-
-### 21.1 Structured logs
-
-Log JSON with:
-
-- `event`.
-- `app_job_id`.
-- `worker_call_id` only in private logs.
-- `stage`.
-- `status`.
-- `duration_ms`.
-- `model_version`.
-- `error_code`.
-- `environment`.
-
-Do not log raw audio, credentials, signed URLs, or full user-provided URLs where avoidable.
-
-### 21.2 Metrics
-
-Track:
-
-- Jobs created.
-- Jobs completed.
-- Jobs failed by public error code.
-- Jobs canceled.
-- Queue delay.
-- End-to-end duration.
-- GPU inference duration.
-- Worker cold-start duration.
-- Output upload failures.
-- Download requests.
-- Rate-limit rejections.
-- Storage bytes and deletion success.
-
-### 21.3 Alerts
-
-Alert on:
-
-- Worker launch failures.
-- Callback signature failures above baseline.
-- Completion failure rate above threshold.
-- p90 processing time above the target.
-- Storage cleanup failures.
-- Database connection errors.
-- Unexpected GPU cost or concurrency.
-- Repeated input validation abuse.
-- Daily GPU spend or GPU-seconds above the configured budget, which triggers the kill switch automatically.
-
-### 21.4 Support diagnostics
-
-A user-facing reference code should map to a private diagnostic record. Support staff should be able to find a job by reference code without seeing file contents unnecessarily.
-
-## 22. Retention and Cleanup
-
-Recommended initial policy:
-
-- Uploaded source files deleted after successful processing or after a short maximum window.
-- Generated outputs expire after 24 hours for guests.
-- Account retention can be longer only if explicitly selected by the user.
-- Abandoned uploads expire automatically.
-- Database job metadata is retained only as long as needed for support, usage accounting, and legal obligations.
-
-Implement cleanup as an idempotent scheduled process. It must:
-
-1. Find expired objects.
-2. Delete them from storage.
-3. Mark database records as expired.
-4. Retry transient deletion failures.
-5. Emit metrics for failures.
-
-## 23. Product Launch Stages
-
-### Stage 0: Technical spike
-
-Deliver:
-
-- One local worker command that separates a fixture.
-- One local web form that submits a fixture job.
-- Confirm model quality, VRAM, and timing.
-- Confirm output format compatibility.
-
-Exit criteria:
-
-- At least one candidate model produces usable stems.
-- Maximum supported track limit is evidence-based.
-- Commercial-use license is acceptable or a replacement is identified.
-
-### Stage 1: Private development environment
-
-Deliver:
-
-- Next.js upload UI.
-- Direct object-storage upload.
-- Database job state.
-- Modal worker deployment.
-- Signed worker callbacks.
-- Polling job page.
-- MP3 output.
-
-Exit criteria:
-
-- A new developer can run the complete flow from the README.
-- Staging can process a fixture end to end.
-- A failed worker job does not leave an indefinite `processing` record.
-
-### Stage 2: MVP beta
-
-Deliver:
-
-- All five selectable output formats.
-- Vocals/instrumental mode.
-- Full-stems mode if benchmarked.
-- Guest quotas.
-- Secure downloads.
-- Retention cleanup.
-- Responsive and accessible UI.
-- Error and retry flows.
-- Terms, privacy, and content policy pages.
-
-Exit criteria:
-
-- p90 supported-track completion is within the published target.
-- No known critical authorization or storage exposure.
-- End-to-end tests pass on staging.
-- At least several real-world test tracks pass quality review.
-
-### Stage 3: Public launch
-
-Deliver:
-
-- Production Vercel domain.
-- Production Modal deployment.
-- Monitoring and alerting.
-- Abuse controls.
-- Support contact.
-- Cost limits and emergency kill switch.
-- Launch checklist sign-off.
-
-### Stage 4: Paid product
+### 11.4 Constraints and indexes
 
 Add:
 
-- Accounts.
-- Email verification if needed.
-- Job history.
-- Credits or subscriptions.
-- Payment provider integration after provider selection and review.
-- Per-user quotas.
-- Receipts and account deletion.
+- Unique owner + idempotency key hash.
+- Index on status and created time.
+- Index on expiry time.
+- Foreign keys from outputs and events to jobs.
+- Checks for progress between 0 and 100.
+- Application-level transition validation.
 
-Do not add billing before the anonymous core workflow is reliable and cost-bounded.
+Use an atomic claim operation so two worker loops cannot process the same job.
 
-## 24. Implementation Task Breakdown
+## 12. Worker Implementation
 
-Each task should leave the repository in a buildable state.
+### 12.1 Worker process
 
-### Phase 1: Foundation
+The worker must be runnable directly:
 
-#### Task 1: Initialize repository and workspace
-
-Dependencies: none.
-
-Work:
-
-- Create the monorepo layout.
-- Scaffold the Next.js app.
-- Add TypeScript, Tailwind, shadcn/ui, linting, and formatting.
-- Add the Python worker project with pinned dependencies (pip + venv).
-- Use npm workspaces for the monorepo and Drizzle ORM against Supabase Postgres (transaction pooler connection).
-- Add root documentation and environment templates.
-
-Acceptance criteria:
-
-- Web app starts locally.
-- Worker test command starts successfully.
-- No secrets are committed.
-
-Verification:
-
-- Web lint and typecheck pass.
-- Worker lint/type checks pass.
-- README setup instructions work on a clean machine.
-
-#### Task 2: Define shared contracts
-
-Dependencies: Task 1.
-
-Work:
-
-- Add JSON schemas for job requests, status responses, worker events, and manifests.
-- Define enum values for statuses, stages, modes, formats, and public errors.
-- Add schema validation tests.
-
-Acceptance criteria:
-
-- Web and worker agree on the event shapes.
-- Invalid events are rejected in tests.
-
-#### Task 3: Create database schema and migrations
-
-Dependencies: Task 2.
-
-Work:
-
-- Add `jobs`, `job_outputs`, `worker_events`, and `usage_events` tables.
-- Add state-transition constraints in application logic.
-- Add seed/test helpers.
-
-Acceptance criteria:
-
-- A fresh database can be migrated from zero.
-- Job records can be created and updated transactionally.
-
-### Phase 2: Storage and upload
-
-#### Task 4: Implement storage adapter
-
-Dependencies: Tasks 1 and 2.
-
-Work:
-
-- Add presigned upload generation.
-- Add object existence checks.
-- Add signed download generation.
-- Add delete and expiry helpers.
-- Implement a fake adapter for tests.
-- Configure bucket CORS for the app origin (GET/PUT/HEAD, content-type, etag, range requests) so XHR upload progress and audio previews work.
-
-Acceptance criteria:
-
-- Browser never sends large audio through Vercel.
-- Storage objects are private.
-- Tests cover unauthorized object access.
-
-#### Task 5: Build the upload UI
-
-Dependencies: Tasks 2 and 4.
-
-Work:
-
-- Add dropzone, file picker, validation, progress, remove, and retry states.
-- Add responsive layout and accessibility behavior.
-
-Acceptance criteria:
-
-- MP3 can be selected and uploaded directly.
-- Invalid files show useful errors.
-- Upload progress is visible.
-
-### Phase 3: Job creation and status
-
-#### Task 6: Implement job creation API
-
-Dependencies: Tasks 2, 3, and 4.
-
-Work:
-
-- Add presign route.
-- Add job creation route.
-- Add idempotency handling.
-- Add guest access authorization.
-- Add server-side policy validation.
-
-Acceptance criteria:
-
-- A valid uploaded object creates exactly one job.
-- Repeated requests with the same idempotency key do not duplicate work.
-- Invalid modes, formats, and objects are rejected.
-
-#### Task 7: Implement job status API and page
-
-Dependencies: Task 6.
-
-Work:
-
-- Add status route.
-- Add job page.
-- Add polling hook with backoff and terminal-state handling.
-- Add progress UI and failure UI.
-
-Acceptance criteria:
-
-- Refreshing a job page recovers the job state.
-- Polling stops at terminal states.
-- Secrets and internal IDs never appear in responses.
-
-### Phase 4: Worker spike
-
-#### Task 8: Build local audio validation pipeline
-
-Dependencies: Task 2.
-
-Work:
-
-- Implement temporary directory management.
-- Add `ffprobe` validation.
-- Add duration, channel, sample-rate, and size checks.
-- Add safe source retrieval.
-
-Acceptance criteria:
-
-- Valid fixture audio passes.
-- Corrupt, non-audio, oversized, and over-duration inputs fail with stable codes.
-- Temporary files are removed after failures.
-
-#### Task 9: Evaluate and wrap candidate models
-
-Dependencies: Task 8.
-
-Work:
-
-- Add model adapter interface.
-- Integrate the selected vocal/instrumental model.
-- Evaluate Demucs or another multi-stem candidate.
-- Pin versions and record license/benchmark data.
-
-Acceptance criteria:
-
-- Models produce expected stem names and durations.
-- Model loading is cached in warm containers.
-- Quality and performance results are documented.
-
-#### Task 10: Implement encoding and packaging
-
-Dependencies: Task 9.
-
-Work:
-
-- Add WAV, MP3, FLAC, OGG, and M4A encoding.
-- Add output validation.
-- Add ZIP and manifest creation.
-
-Acceptance criteria:
-
-- Every format decodes successfully.
-- Stems have aligned duration.
-- ZIP contains only expected files.
-
-### Phase 5: Modal integration
-
-#### Task 11: Deploy the Modal worker
-
-Dependencies: Tasks 8, 9, and 10.
-
-Work:
-
-- Create the Modal image.
-- Add GPU configuration.
-- Add persistent model volume.
-- Add launch endpoint.
-- Add async execution.
-
-Acceptance criteria:
-
-- A staging request is accepted quickly.
-- The long-running function executes independently of Vercel request duration.
-- Worker logs include private diagnostic identifiers.
-
-#### Task 12: Add signed progress and completion callbacks
-
-Dependencies: Tasks 2, 3, and 11.
-
-Work:
-
-- Add callback signer in the worker.
-- Add callback verifier in the web app.
-- Add idempotent event storage.
-- Add terminal failure handling.
-- Add a scheduled reconcile route (Vercel Cron) that fails or relaunches stuck jobs and marks expired results.
-
-Acceptance criteria:
-
-- Progress reaches the web job page.
-- Duplicate callbacks do not corrupt state.
-- Invalid signatures are rejected.
-- Stuck jobs have timeout recovery.
-
-#### Task 13: Connect web job creation to Modal
-
-Dependencies: Tasks 6, 11, and 12.
-
-Work:
-
-- Add worker launch client.
-- Persist worker call ID.
-- Handle launch failure transactionally.
-- Add retry policy for transient launch failures.
-
-Acceptance criteria:
-
-- A web-created job reaches the worker.
-- Launch failures become visible job failures or retry states.
-- The Vercel request returns without waiting for inference.
-
-### Phase 6: Results and product hardening
-
-#### Task 14: Build result preview and downloads
-
-Dependencies: Tasks 7, 10, and 12.
-
-Work:
-
-- Add stem result list.
-- Add native audio previews.
-- Add individual and ZIP downloads.
-- Add signed URL expiry messaging.
-
-Acceptance criteria:
-
-- Users can preview and download every produced stem.
-- Expired objects are not downloadable.
-- Download authorization is tested.
-
-#### Task 15: Add quotas, rate limits, and cleanup
-
-Dependencies: Tasks 6 and 13.
-
-Work:
-
-- Add guest quotas.
-- Add active-job limits.
-- Add abandoned upload cleanup.
-- Add result expiry cleanup.
-- Add administrative disable switch.
-
-Acceptance criteria:
-
-- A single visitor cannot create unlimited jobs.
-- Cleanup is retryable and observable.
-- Costs are bounded under abuse scenarios.
-
-#### Task 16: Add YouTube input mode
-
-Dependencies: Tasks 8, 13, and legal review.
-
-Work:
-
-- Add secondary YouTube input UI.
-- Add hostname and URL validation.
-- Add worker downloader with strict limits.
-- Add content-policy acknowledgement.
-
-Acceptance criteria:
-
-- Valid supported URLs process successfully.
-- Unsupported/private/restricted URLs fail safely.
-- Downloader cannot access arbitrary hosts.
-
-### Phase 7: Verification and launch
-
-#### Task 17: Add automated test coverage
-
-Dependencies: all previous tasks.
-
-Work:
-
-- Add unit, API integration, worker integration, contract, and E2E suites.
-- Add a legal test fixture track.
-- Add staging smoke tests.
-
-Acceptance criteria:
-
-- CI passes on a clean checkout.
-- Critical failure and authorization paths are covered.
-
-#### Task 18: Run performance and model benchmark suite
-
-Dependencies: Tasks 9 and 17.
-
-Work:
-
-- Measure cold and warm worker runs.
-- Measure supported duration limits.
-- Measure all output formats.
-- Record cost and p90 latency.
-
-Acceptance criteria:
-
-- Published time target is backed by data.
-- Input limits are configured from results.
-- Model release is reproducible.
-
-#### Task 19: Complete security, privacy, and launch review
-
-Dependencies: Tasks 15, 16, and 17.
-
-Work:
-
-- Review secrets, storage policies, auth, callbacks, SSRF, uploads, and logs.
-- Publish policy pages.
-- Confirm model and dependency licenses.
-- Configure monitoring and support.
-
-Acceptance criteria:
-
-- No known critical security issue remains.
-- User deletion and retention behavior is documented.
-- Production rollback plan exists.
-
-#### Task 20: Deploy production and perform smoke test
-
-Dependencies: Task 19.
-
-Work:
-
-- Deploy Modal worker.
-- Deploy Vercel app.
-- Configure domain and production variables.
-- Process a legal fixture track.
-- Confirm downloads, cleanup, and monitoring.
-
-Acceptance criteria:
-
-- A new visitor can complete the full flow from the public domain.
-- Production results decode correctly.
-- Logs and alerts are visible.
-- Emergency disable control is tested.
-
-## 25. Checkpoints
-
-### Checkpoint A: Foundation
-
-- Repository installs from a clean checkout.
-- Web and worker checks pass.
-- Shared contracts are documented.
-- Database migrations apply cleanly.
-
-### Checkpoint B: Local vertical slice
-
-- A local upload creates a job.
-- A fake worker updates the job.
-- The browser reaches a result page.
-- Tests cover the complete fake flow.
-
-### Checkpoint C: GPU vertical slice
-
-- A staging job reaches Modal.
-- The worker separates a legal fixture.
-- Results upload and callbacks update the UI.
-- Processing time and VRAM are recorded.
-
-### Checkpoint D: Public beta
-
-- Five formats work.
-- Quotas and cleanup are active.
-- Accessibility and security tests pass.
-- Privacy and content policies are published.
-
-### Checkpoint E: Production launch
-
-- End-to-end smoke test passes on the public domain.
-- Monitoring and rollback are ready.
-- Cost and concurrency limits are configured.
-- Support workflow is documented.
-
-## 26. Risks and Mitigations
-
-| Risk | Impact | Mitigation |
-|---|---|---|
-| Model inference exceeds five minutes | High | Benchmark early, limit duration, cache models, choose GPU size from data, expose honest target |
-| GPU cold starts are slow | High | Persistent model volume, warm-container policy, queue and timeout instrumentation |
-| Model quality is inconsistent | High | Compare candidates, blind listening tests, pin versions, publish supported modes conservatively |
-| YouTube behavior changes | Medium | Keep upload as primary input, pin/update downloader deliberately, support graceful failures |
-| Copyright or terms violation | High | Legal review, content policy, no DRM/private bypass, user responsibility acknowledgement |
-| Anonymous abuse creates GPU cost | High | IP/session quotas, concurrency caps, CAPTCHA or accounts, emergency disable switch |
-| Large files exceed web limits | High | Direct-to-storage upload, never proxy audio through Vercel |
-| Storage URLs leak private audio | High | Private bucket, short-lived signatures, authorization before signing |
-| Worker callback spoofing | High | HMAC signature, timestamp, replay protection, idempotent event IDs |
-| Worker fails after accepting a job | High | Heartbeats/timeouts, stuck-job reaper, public retry path |
-| Dependency/model license changes | Medium | Record licenses and checksums, review before upgrades |
-| Output encoders produce invalid files | Medium | `ffprobe` validation and fixture tests for every format |
-| Database connection exhaustion | Medium | Serverless-compatible driver/pooling, short transactions, retry policy |
-| User expects permanent storage | Medium | Show expiry clearly, add accounts/history only with explicit retention policy |
-
-## 27. Open Decisions Before Implementation
-
-These decisions must be answered during the technical spike, not guessed during launch:
-
-1. Which exact vocal/instrumental model passes the quality, latency, memory, and license review?
-2. Which exact multi-stem model, if any, is included in the first public release?
-3. Which S3-compatible object-storage provider is selected?
-4. What maximum duration and file size meet the five-minute target at the target GPU size?
-5. Is guest access allowed in the first public release, or is an account required to control cost?
-6. What is the initial guest quota?
-7. Are all five output formats selectable in the first beta, or is the first private test MP3-only?
-8. Is YouTube enabled at public launch after legal review, or released later?
-9. What output retention window is acceptable for guests?
-10. What is the support and abuse-reporting contact?
-11. Will the first paid version use per-job credits or subscriptions?
-12. What content is permitted for benchmark fixtures and demonstrations?
-
-## 28. Definition of Done for the Core Product
-
-The core product is done when all of the following are true:
-
-- A visitor can open the production website and immediately find the upload control.
-- A valid MP3 can be uploaded directly to private storage.
-- The visitor can choose a supported separation mode and one of five output formats.
-- A job is created exactly once for a repeated request.
-- The Modal worker processes the job asynchronously.
-- The model is loaded from a pinned, validated checkpoint.
-- Progress is visible and survives a browser refresh.
-- Every generated stem has correct timing and a valid audio file.
-- The user can preview individual stems and download a ZIP.
-- Signed download URLs expire as documented.
-- Failures are understandable and retryable.
-- Inputs, outputs, and callbacks are authorized.
-- Guest abuse cannot create unbounded GPU spend.
-- Expired files are deleted automatically.
-- Logs and metrics can explain a failed or slow job.
-- The measured p90 time for supported tracks meets the published target.
-- Production deployment of the web app and worker is independent and documented.
-- Privacy, terms, copyright, model-license, and retention requirements are reviewed.
-
-## 29. Recommended First Build Order
-
-For fastest risk reduction, implement in this order:
-
-1. Local worker separation of a short legal fixture.
-2. Model benchmark and duration-limit decision.
-3. Web upload UI with a fake worker.
-4. Direct object storage upload.
-5. Real database job state and polling.
-6. Modal staging deployment.
-7. Real end-to-end job with MP3 output.
-8. All five output formats.
-9. Result previews and ZIP downloads.
-10. Rate limits, cleanup, and failure recovery.
-11. Full-stem mode if it passes benchmarks.
-12. YouTube mode after legal and operational review.
-13. Public beta and monitoring.
-14. Accounts and billing after usage and cost data exists.
-
-This order keeps the user experience visible from the beginning while testing the highest-risk part, GPU model execution, before investing in secondary features.
-
-## 30. Detailed System Design and Runtime Flow
-
-### 30.1 What the user sees
-
-The product appears to be one website:
-
-```text
-https://your-domain.com
+```bash
+python -m worker.job_loop
 ```
 
-The user does not see separate Vercel and Modal applications. The browser communicates with the Next.js application, and the Next.js application communicates with the worker and storage services behind the scenes.
+It must also support a one-shot command for debugging:
 
-The visible experience is:
-
-```text
-Home page
-  -> choose audio
-  -> upload
-  -> choose separation options
-  -> start job
-  -> processing page
-  -> result page
-  -> preview or download stems
-```
-
-### 30.2 Responsibility boundaries
-
-```text
-Browser
-- Selects files and options.
-- Uploads source directly to object storage.
-- Starts a job through the web API.
-- Polls the public job status endpoint.
-- Requests signed download URLs.
-
-Vercel / Next.js
-- Authenticates and validates requests.
-- Owns the public job ID and user/session access.
-- Stores job metadata and state in Postgres.
-- Creates presigned storage URLs.
-- Starts the Modal worker.
-- Receives signed worker events.
-- Authorizes and signs result downloads.
-
-Object storage
-- Stores source audio and generated outputs.
-- Remains private.
-- Serves large files directly to browser and worker through signed URLs.
-
-Modal
-- Owns the long-running processing execution.
-- Runs yt-dlp when the source is a YouTube URL.
-- Runs ffprobe and audio preprocessing.
-- Runs GPU model inference.
-- Encodes, packages, and uploads results.
-- Sends progress and terminal events back to Vercel.
-
-Postgres
-- Stores job state, ownership, configuration, output metadata, events, and usage data.
-- Never stores the audio bytes themselves.
-```
-
-### 30.3 System components
-
-```text
-                         +----------------+
-                         |  User browser  |
-                         +--------+-------+
-                                  |
-                          HTTPS JSON/API
-                                  |
-                         +--------v-------+
-                         | Next.js/Vercel |
-                         |                |
-                         | UI + API routes|
-                         +---+--------+---+
-                             |        |
-                 SQL metadata|        |signed URLs
-                             |        |
-                   +---------v--+  +--v----------------+
-                   | Neon        |  | Private object    |
-                   | Postgres    |  | storage           |
-                   +---------+---+  +---------+----------+
-                             ^                ^
-                             | callbacks     | source/results
-                             |                |
-                         +---+----------------+---+
-                         | Modal worker            |
-                         | CPU + GPU pipeline     |
-                         |                         |
-                         | download -> validate   |
-                         | -> infer -> encode     |
-                         +-------------------------+
-```
-
-### 30.4 Job state machine
-
-The application should use a finite set of states. Every state transition must be validated on the server.
-
-```text
-created
-  |
-  v
-queued -----> failed
-  |
-  v
-starting ----> failed
-  |
-  v
-downloading -+----> failed
-  |            |
-  v            v
-validating --> processing
-                 |
-                 +----> cancel_requested -> canceled
-                 |
-                 v
-              encoding
-                 |
-                 v
-              uploading
-                 |
-                 +----> failed
-                 |
-                 v
-             completed
-                 |
-                 v
-              expired
-```
-
-Recommended public statuses:
-
-- `queued`: accepted by the web app, waiting for worker execution.
-- `processing`: worker is active; the public stage explains what is happening.
-- `completed`: all expected outputs passed validation and are available.
-- `failed`: processing ended without usable results.
-- `canceled`: processing was canceled or stopped after a cancellation request.
-- `expired`: source and result objects are no longer available.
-
-Internal stages can be more detailed:
-
-- `starting`.
-- `downloading`.
-- `validating`.
-- `preparing_audio`.
-- `separating`.
-- `encoding`.
-- `uploading_results`.
-- `cleanup`.
-
-No job may move backward from a terminal state. Duplicate events for the current state are safe no-ops.
-
-### 30.5 Upload request flow
-
-This is the main product flow for an MP3 upload.
-
-```text
-1. Browser -> Vercel: POST /api/uploads/presign
-2. Vercel -> Postgres: optionally record upload session
-3. Vercel -> Browser: short-lived upload URL + upload ID
-4. Browser -> Object storage: PUT audio bytes directly
-5. Browser -> Vercel: POST /api/jobs
-6. Vercel -> Object storage: verify object exists and size is valid
-7. Vercel -> Postgres: create app job as queued
-8. Vercel -> Modal: launch worker with app job ID + source reference
-9. Modal -> Vercel: accepted response with worker call ID
-10. Vercel -> Postgres: save worker call ID
-11. Vercel -> Browser: app job ID + status URL
-12. Browser -> Vercel: poll GET /api/jobs/{jobId}
-13. Modal -> Object storage: read source
-14. Modal -> GPU: run separation model
-15. Modal -> Object storage: upload stems and ZIP
-16. Modal -> Vercel: signed completed event
-17. Vercel -> Postgres: save outputs and mark completed
-18. Browser -> Vercel: request a download
-19. Vercel -> Object storage: create short-lived signed URL
-20. Vercel -> Browser: redirect or return signed URL
-21. Browser -> Object storage: download the file directly
-```
-
-The critical design rule is that Vercel handles control-plane traffic and object storage handles data-plane traffic. Large audio bytes should not travel through a Vercel function.
-
-### 30.6 YouTube request flow
-
-YouTube is a second source type that follows the same job lifecycle.
-
-```text
-1. User selects Import from YouTube.
-2. Browser -> Vercel: submit URL, mode, and output format.
-3. Vercel parses the URL and checks the approved hostname allowlist.
-4. Vercel -> Postgres: create queued job with source_type=youtube.
-5. Vercel -> Modal: launch worker with the validated URL.
-6. Modal -> YouTube: download audio with controlled yt-dlp arguments.
-7. Modal -> ffprobe: validate actual duration, size, codec, and channels.
-8. Modal -> GPU: run the selected separation model.
-9. Modal -> Object storage: upload outputs.
-10. Modal -> Vercel: signed progress/completion event.
-11. Browser polls the same public job endpoint as upload jobs.
-```
-
-The worker must validate the actual downloaded media because a valid-looking URL does not guarantee that the media is available, short enough, or audio-only. If validation fails, the worker stops before GPU inference.
-
-### 30.7 Web-to-worker handoff
-
-The handoff should use a thin authenticated Modal HTTP endpoint:
-
-```text
-POST /run
-Authorization: Bearer <launch secret>
-
-{
-  "appJobId": "job_...",
-  "source": {
-    "type": "upload",
-    "objectKey": "sources/upl_.../input.mp3"
-  },
-  "mode": "vocals_instrumental",
-  "outputFormat": "mp3",
-  "callbackUrl": "https://your-domain.com/api/internal/worker-events"
-}
-```
-
-Modal should immediately acknowledge the request after starting the background execution:
-
-```json
-{
-  "accepted": true,
-  "workerCallId": "internal-worker-reference"
-}
-```
-
-The web app stores the worker reference but never gives it to the browser.
-
-The long-running function then executes independently:
-
-```text
-Modal HTTP endpoint
-  -> validate launch secret
-  -> validate payload
-  -> start background Modal function
-  -> return accepted response
-
-Background Modal function
-  -> emit started event
-  -> retrieve/download source
-  -> validate audio
-  -> run model
-  -> encode and upload outputs
-  -> emit completed or failed event
-```
-
-The exact Modal SDK invocation method must be confirmed against the pinned SDK version during implementation. The architecture does not depend on exposing Modal's internal call lookup mechanism to the browser.
-
-### 30.8 Why the browser polls Vercel
-
-The browser should poll Vercel rather than Modal directly because Vercel is the public authority for:
-
-- Job ownership.
-- Guest access tokens.
-- Account authorization.
-- Sanitized public errors.
-- Output expiry.
-- Rate limiting.
-- Stable API behavior if the worker provider changes later.
-
-Polling example:
-
-```text
-GET /api/jobs/job_123
-
-queued      -> wait 2 seconds
-processing  -> wait 2 to 3 seconds
-completed   -> stop and show results
-failed      -> stop and show retry
-expired     -> stop and show expiration message
-```
-
-The worker callback updates Postgres. The next browser poll reads the new state. This avoids making the browser aware of Modal credentials or implementation details.
-
-### 30.9 Callback and state update flow
-
-```text
-Modal worker
-  -> construct event JSON
-  -> add event ID and timestamp
-  -> HMAC-sign timestamp + raw body
-  -> POST to Vercel callback route
-
-Vercel callback route
-  -> read raw request body
-  -> verify timestamp freshness
-  -> verify HMAC signature
-  -> validate event schema
-  -> insert event ID if new
-  -> lock the job row or use a transactional update
-  -> verify allowed state transition
-  -> update job/output records
-  -> return 2xx
-```
-
-For a completed event, the transaction should:
-
-1. Verify the job is not canceled or already expired.
-2. Verify every output listed in the manifest has expected metadata.
-3. Insert output rows.
-4. Set `jobs.status=completed`, `progress=100`, and `completed_at`.
-5. Set output expiry.
-6. Record usage data.
-7. Commit once.
-
-For a failed event, the transaction should:
-
-1. Store the stable public error code.
-2. Store a private diagnostic reference.
-3. Mark the job failed unless it is already terminal.
-4. Avoid exposing worker stack traces.
-5. Preserve enough metadata for support.
-
-### 30.10 Data lifecycle
-
-```text
-Source upload
-  -> private source object
-  -> worker reads source
-  -> source deleted after success or source TTL
-
-Separated stems
-  -> private individual stem objects
-  -> private ZIP object
-  -> signed URL generated on demand
-  -> objects deleted at expiry
-
-Job metadata
-  -> created and updated during processing
-  -> retained according to privacy/support policy
-  -> marked expired when files disappear
-```
-
-The database is the source of truth for job state. Object storage is the source of truth for binary file availability. The application must handle the case where metadata says `completed` but an object has already expired by returning a clear `expired` result instead of a broken download.
-
-### 30.11 Failure paths
-
-#### Upload failure
-
-```text
-Presign succeeds -> storage upload fails
-  -> browser displays retry
-  -> abandoned upload is eventually deleted
-  -> no processing job is created
-```
-
-#### Worker launch failure
-
-```text
-Job created -> Modal launch fails
-  -> transaction or recovery path marks launch_failed
-  -> retry launch with bounded attempts
-  -> show service-busy error if retries are exhausted
-```
-
-#### Invalid audio
-
-```text
-Worker starts -> ffprobe rejects source
-  -> no model invocation
-  -> failed event: INVALID_AUDIO or LIMIT_EXCEEDED
-  -> temporary files removed
-  -> user can submit another file
-```
-
-#### Model failure
-
-```text
-Worker starts inference -> model/runtime error
-  -> capture private diagnostics
-  -> clean temporary files
-  -> emit MODEL_FAILED
-  -> no partial result is presented as complete
-```
-
-#### Output failure
-
-```text
-Inference succeeds -> encoding/upload fails
-  -> delete partial output objects
-  -> emit OUTPUT_FAILED
-  -> mark job failed
-  -> allow retry
-```
-
-#### Callback failure
-
-```text
-Worker completes -> callback request fails
-  -> retry callback with exponential backoff
-  -> keep event ID stable across retries
-  -> reconciliation job detects jobs stuck in processing
-  -> status is repaired from worker or marked failed
-```
-
-#### Browser closes
-
-```text
-Browser closes during processing
-  -> job continues independently
-  -> user returns to job URL
-  -> browser reads current state
-  -> results remain available until expiry
-```
-
-### 30.12 Time budget model
-
-For a supported track, total time is:
-
-```text
-T_total = upload/download
-        + queue delay
-        + worker cold start
-        + input validation
-        + model inference
-        + encoding
-        + result upload
-```
-
-The five-minute target should be measured as a percentile, not an absolute guarantee. Track each component separately. The system should reject or defer jobs when the current queue or worker capacity cannot meet the configured service target.
-
-Use an internal deadline for every job. For example:
-
-```text
-job deadline = created_at + configured maximum processing window
-```
-
-A watchdog should mark jobs failed or retryable when they exceed the deadline. A user should never see an infinite spinner.
-
-### 30.13 Scaling behavior
-
-At low traffic:
-
-- Vercel serves the UI and API.
-- Modal scales GPU workers toward zero.
-- Model weights remain in the persistent cache volume.
-- Storage and database usage remain small.
-
-At moderate traffic:
-
-- Jobs queue in Postgres-backed state.
-- Modal concurrency is capped to control cost.
-- The web app continues responding quickly because it does not wait on inference.
-- The UI reports queueing rather than pretending a worker has started.
-
-At high traffic:
-
-- Add a dedicated queue if Postgres polling is no longer sufficient.
-- Add account/credit requirements.
-- Add worker pools by model mode.
-- Add priority and fair-use policies.
-- Add cost-based admission control.
-
-Do not scale GPU concurrency without measuring VRAM, queue delay, failure rate, and cost.
-
-### 30.14 Control-plane versus data-plane rule
-
-This distinction should guide implementation:
-
-Control plane:
-
-- JSON requests.
-- Job IDs.
-- State transitions.
-- Progress events.
-- Authentication.
-- Quotas.
-- Signed URL creation.
-
-Data plane:
-
-- Input audio bytes.
-- Stem audio bytes.
-- ZIP files.
-- Direct storage transfer.
-
-Control-plane traffic may pass through Vercel. Data-plane traffic should use direct signed transfers between browser/worker and object storage.
-
-### 30.15 User journey with infrastructure hidden
-
-```text
-User opens website
-  |
-  +--> chooses song
-  |      |
-  |      +--> direct upload with progress
-  |
-  +--> selects "Vocals + instrumental"
-  |
-  +--> selects MP3
-  |
-  +--> clicks "Separate audio"
-  |
-  +--> sees "Preparing audio"
-  +--> sees "Separating stems"
-  +--> sees "Preparing downloads"
-  |
-  +--> sees Vocals and Instrumental players
-  +--> previews a stem
-  +--> downloads one stem or all stems
-  +--> sees expiration information
-```
-
-At no point does the user need to choose a cloud provider, create a Modal account, configure a Python environment, understand model names, or manually move files between services.
-
-## 31. System Design Acceptance Criteria
-
-- The public product is one website with one primary upload flow.
-- Vercel handles only short-lived control-plane requests.
-- Large audio files bypass Vercel through direct storage transfers.
-- The web app owns public job identity and authorization.
-- Modal owns long-running audio processing.
-- The worker can be redeployed without changing the user-facing URL or API contract.
-- The browser never calls Modal directly with credentials.
-- Every job has an explicit state and deadline.
-- Worker callbacks are signed, idempotent, and schema-validated.
-- Failed jobs cannot remain in a permanent processing state.
-- Results are private, signed on demand, and automatically expired.
-- The system can process both uploaded files and approved YouTube URLs through the same job lifecycle.
-- Model, format, duration, and concurrency choices are configuration-driven and benchmarked.
-
-## 32. Separation Engine Design
-
-This section defines the engine that turns one mixed music track into separate audio stems. It is deliberately independent from the web UI, database, and deployment provider. The engine should be callable locally, from a test harness, or from a Modal worker with the same core interface.
-
-### 32.1 Engine objective
-
-Input:
-
-```text
-One audio file containing a mixed music track
-```
-
-Output:
-
-```text
-A named set of time-aligned audio stems
-```
-
-For the default mode:
-
-```text
-vocals.wav
-instrumental.wav
-```
-
-For a full-stem mode:
-
-```text
-vocals.wav
-drums.wav
-bass.wav
-other.wav
-```
-
-The engine must preserve:
-
-- Track duration.
-- Start time.
-- Channel configuration according to the output policy.
-- Sample alignment across all stems.
-- A documented sample rate and sample format.
-
-The engine must not promise that the output is a mathematically perfect reconstruction or that it can recover information removed by a lossy source file.
-
-### 32.2 Engine layers
-
-```text
-Engine API
-  -> request validation
-  -> source inspection
-  -> audio decode and normalization
-  -> model routing
-  -> model loading/cache
-  -> chunk planning
-  -> GPU inference
-  -> overlap-add reconstruction
-  -> optional mixture consistency
-  -> output safety checks
-  -> master WAV writing
-  -> format encoding
-  -> manifest and result validation
-```
-
-Each layer must have one responsibility. Model-specific code belongs behind an adapter; the pipeline must not contain Demucs- or RoFormer-specific tensor logic.
-
-### 32.3 Engine API
-
-The core API should look conceptually like this:
-
-```python
-result = engine.separate(
-    input_path="/tmp/input.wav",
-    mode="vocals_instrumental",
-    output_format="mp3",
-    options=SeparationOptions(
-        device="cuda",
-        model_policy="production_default",
-        keep_master_wav=False,
-    ),
-    progress_callback=on_progress,
-)
-```
-
-Suggested result shape:
-
-```python
-SeparationResult(
-    stems={
-        "vocals": StemArtifact(path="...", duration_seconds=214.2),
-        "instrumental": StemArtifact(path="...", duration_seconds=214.2),
-    },
-    archive_path="...",
-    manifest_path="...",
-    engine_metadata={
-        "mode": "vocals_instrumental",
-        "model_id": "pinned-model-id",
-        "model_revision": "pinned-revision",
-        "sample_rate": 44100,
-        "duration_seconds": 214.2,
-    },
-)
-```
-
-The public engine API should return artifact metadata, not raw giant tensors. Tensor operations stay inside the worker process and are released before the encoding phase when possible.
-
-### 32.4 Request validation
-
-Before loading a model:
-
-1. Confirm the input path is inside the job's private temporary directory.
-2. Confirm the file exists and is below the configured byte limit.
-3. Run `ffprobe` and parse JSON output.
-4. Confirm at least one audio stream exists.
-5. Reject video-only, subtitle-only, image-only, and malformed files.
-6. Confirm duration is positive and below the mode-specific limit.
-7. Confirm the decoded stream has a supported channel count.
-8. Confirm the file is not empty or obviously corrupted.
-9. Check for excessive metadata or suspiciously large declared values.
-10. Create a source checksum for diagnostics and deduplication.
-
-Do not trust the extension or browser MIME type. The decoded media properties are authoritative.
-
-### 32.5 Audio canonicalization
-
-The model should always receive a canonical tensor representation, regardless of the source format.
-
-Recommended internal representation:
-
-```text
-Shape: channels x samples
-Type: float32 during baseline implementation
-Range: approximately -1.0 to +1.0
-Layout: stereo unless the selected model explicitly supports another layout
-Sample rate: the model's required sample rate
-```
-
-Canonicalization steps:
-
-1. Decode with FFmpeg or a tested audio library.
-2. Convert to the model's required sample rate.
-3. Convert mono to the model's expected channel layout.
-4. Keep stereo channels separate; do not downmix by default.
-5. Preserve exact sample count after resampling in metadata.
-6. Record the original sample rate, channels, duration, and codec.
-7. Avoid normalization that changes the artistic dynamics unless required by the model.
-8. Use a high-quality resampler with documented settings.
-
-For very quiet or clipped sources, continue processing but record a warning. Do not silently apply mastering or loudness normalization.
-
-### 32.6 Model router
-
-The router maps a user-facing mode to a validated engine profile:
-
-```text
-vocals_instrumental
-  -> two-source adapter
-  -> selected production vocal/instrumental checkpoint
-
-full_stems
-  -> multi-source adapter
-  -> selected production multi-stem checkpoint
-```
-
-A profile should contain:
-
-```text
-model_id
-model_revision
-checkpoint_uri or cache key
-expected_stems
-required_sample_rate
-required_channels
-preferred_device
-chunk_length
-overlap
-batch_size
-precision_policy
-license_reference
-```
-
-The user selects a mode, not a raw checkpoint. Only an allowlisted model profile can be executed.
-
-### 32.7 Candidate model strategy
-
-The engine should support multiple adapters so models can be compared and upgraded safely.
-
-Initial adapter candidates:
-
-- A BS-RoFormer-family adapter for high-quality vocals/instrumental output.
-- A Demucs-family adapter for multi-source output.
-- A compatibility adapter around a maintained source-separation library if it provides a better validated model or simpler production maintenance.
-
-Model selection must be evidence-based. The engine release process should require:
-
-- A pinned source repository commit or package version.
-- A checkpoint checksum.
-- A model and weights license record.
-- Quality evaluation results.
-- Cold-start and warm-run timings.
-- Peak VRAM measurement.
-- Expected stem-name mapping.
-- A rollback profile.
-
-A new model is not production-ready merely because it is newer or has a higher score on one benchmark.
-
-### 32.8 Model loading and cache
-
-Model loading is expensive and must be separated from per-track processing.
-
-At container initialization:
-
-1. Resolve the configured model profile.
-2. Check the persistent model volume for the exact checkpoint checksum.
-3. Download the checkpoint only if absent and only from an allowlisted source.
-4. Verify the checksum before loading.
-5. Load the model onto the target device.
-6. Switch to evaluation mode.
-7. Disable gradients.
-8. Run a short warm-up inference with a tiny valid tensor.
-9. Record load and warm-up times.
-
-At job completion:
-
-- Release per-job tensors.
-- Keep the model resident in the warm container.
-- Never let one job's input or output tensor be reused by another job.
-
-If the two modes require too much memory together, create separate Modal worker classes or profiles. Do not load both models into the same GPU process by default.
-
-### 32.9 Chunk planning
-
-A multi-minute track should not be passed as one uncontrolled tensor. The engine must use bounded windows with overlap.
-
-Conceptual algorithm:
-
-```text
-full waveform
-  -> calculate window positions
-  -> pad final window if necessary
-  -> infer each window
-  -> apply overlap weighting
-  -> add predictions into output buffers
-  -> divide by accumulated weights
-  -> trim padding to original sample count
-```
-
-Chunk settings are model-specific and must be read from the model profile. The engine must not blindly use one window length for every model.
-
-Requirements:
-
-- Use overlap sufficient for the selected model's receptive field.
-- Use a stable weighting window such as the library-recommended crossfade/window.
-- Ensure every input sample receives non-zero accumulated weight.
-- Keep output buffers bounded and use disk-backed intermediates only if memory requires it.
-- Emit progress based on completed chunks when chunk counts are reliable.
-- Validate that the reconstructed output has exactly the expected sample count.
-
-Prefer the official or maintained library's tested `apply_model`/inference path when it already implements chunking and overlap-add correctly. Custom reconstruction is only justified when it is covered by audio regression tests.
-
-### 32.10 GPU inference loop
-
-The baseline inference loop is:
-
-```python
-model.eval()
-with inference_mode():
-    for chunk in planned_chunks:
-        input_tensor = chunk.to(device, non_blocking=True)
-        with configured_autocast_if_validated():
-            prediction = model(input_tensor)
-        prediction = prediction.float().cpu()
-        accumulator.add(prediction)
-        release(input_tensor, prediction)
-```
-
-The exact model call is adapter-owned because model output shapes differ.
-
-Inference requirements:
-
-- Use inference-only execution.
-- Start with float32 for correctness; enable mixed precision only after regression tests.
-- Do not use a batch size that can exceed VRAM under a maximum-length input.
-- Keep GPU synchronization points measurable but minimal.
-- Catch out-of-memory errors and classify them separately from bad input.
-- Never silently retry with a different model or lower quality setting unless the fallback is explicitly configured.
-- Clear per-job GPU memory after a failure.
-
-### 32.11 Mixture consistency
-
-Many source-separation models produce stems whose sum is close to, but not exactly, the input mixture. The engine may apply a documented mixture-consistency projection:
-
-```text
-residual = mixture - sum(predicted_stems)
-corrected_stem_i = predicted_stem_i + allocation_i * residual
-```
-
-This must be optional and model-profile-specific. Possible allocations include equal allocation or energy-weighted allocation, but the choice must be evaluated because forcing consistency can increase artifacts in some models.
-
-Rules:
-
-- Never apply it by default without an A/B listening test.
-- Preserve the original mixture for comparison.
-- Record whether it was applied in the manifest.
-- Verify that the correction does not create clipping or loudness jumps.
-
-For a two-source result, the instrumental stem may be computed as the model's direct instrumental prediction or as mixture minus vocals depending on the selected model. That choice must be fixed per model profile and benchmarked.
-
-### 32.12 Postprocessing policy
-
-Postprocessing should be conservative. The engine should not attempt to hide separation artifacts by aggressively denoising or mastering the stems.
-
-Allowed baseline operations:
-
-- Trim only engine-added padding.
-- Restore expected sample count.
-- Clamp or reject invalid floating-point values.
-- Apply a tiny safety limiter only if required to prevent encoder overflow, and document it.
-- Preserve channel count and timing.
-- Write a high-quality temporary WAV master.
-
-Not enabled by default:
-
-- Loudness normalization.
-- Noise reduction.
-- Artificial stereo widening.
-- EQ or compression.
-- Silence removal.
-- Automatic fade-in/fade-out.
-- Dynamic range processing.
-
-Users should receive separated stems, not altered mixes.
-
-### 32.13 Stem quality gates
-
-Before encoding, each stem must pass:
-
-- Finite-value check: no NaN or infinity.
-- Shape check: expected channels and sample count.
-- Duration check: within a small tolerance of the source.
-- Peak check: no unexpected extreme values.
-- Empty/silent check according to mode policy.
-- File-write check for the temporary master.
-
-The engine should calculate diagnostics such as:
-
-- Peak amplitude.
-- RMS or integrated loudness for internal diagnostics.
-- DC offset.
-- Duration.
-- Number of clipped samples.
-- Residual energy if mixture consistency is evaluated.
-
-A silent stem is not always an error, so silence should produce a warning unless the selected mode requires meaningful content.
-
-### 32.14 Encoding pipeline
-
-The engine should separate once into a high-quality master representation, then encode the user's selected format from that master.
-
-```text
-model output tensors
-  -> validated temporary WAV masters
-  -> selected encoder
-  -> encoded stem files
-  -> ffprobe verification
-  -> ZIP packaging
-```
-
-This prevents each output format from triggering another model run.
-
-Format policy:
-
-```text
-mp3 -> LAME with configured high-quality bitrate
-wav  -> PCM with documented bit depth and sample rate
-flac -> lossless compression
-ogg  -> documented Vorbis or Opus choice
-m4a  -> AAC in an M4A container with configured bitrate
-```
-
-The exact command arguments belong in one encoder module, not scattered across the pipeline. Use subprocess argument arrays and capture stderr for private diagnostics.
-
-After encoding:
-
-1. Run `ffprobe` on every output.
-2. Verify the expected container and codec.
-3. Verify nonzero size.
-4. Verify duration within tolerance.
-5. Verify the expected number of channels.
-6. Compute checksum.
-7. Only then upload the artifact.
-
-### 32.15 Naming and manifest rules
-
-Use deterministic, sanitized names derived from a server-generated job directory:
-
-```text
-song__vocals.mp3
-song__instrumental.mp3
-song__drums.mp3
-song__bass.mp3
-song__other.mp3
-manifest.json
-```
-
-The original filename may be used as a display-name prefix after removing path separators, control characters, and unsupported characters. It must never control a path outside the job directory.
-
-Manifest fields:
-
-```json
-{
-  "schemaVersion": 1,
-  "jobId": "job_...",
-  "source": {
-    "displayName": "song.mp3",
-    "durationSeconds": 214.2,
-    "sampleRate": 44100,
-    "channels": 2
-  },
-  "separation": {
-    "mode": "vocals_instrumental",
-    "modelId": "pinned-model-id",
-    "modelRevision": "pinned-revision",
-    "mixtureConsistency": false
-  },
-  "output": {
-    "format": "mp3",
-    "stems": [
-      { "name": "vocals", "durationSeconds": 214.2, "sha256": "..." },
-      { "name": "instrumental", "durationSeconds": 214.2, "sha256": "..." }
-    ]
-  }
-}
-```
-
-Never put storage credentials, signed URLs, raw source URLs, or callback secrets into the manifest.
-
-### 32.16 Engine failure handling
-
-Classify failures so the web app can show useful messages:
-
-```text
-INVALID_AUDIO
-LIMIT_EXCEEDED
-DOWNLOAD_FAILED
-MODEL_LOAD_FAILED
-GPU_OUT_OF_MEMORY
-INFERENCE_FAILED
-OUTPUT_ENCODING_FAILED
-OUTPUT_VALIDATION_FAILED
-STORAGE_UPLOAD_FAILED
-CANCELED
-TIMEOUT
-UNKNOWN
-```
-
-Retry policy:
-
-- Do not retry invalid input.
-- Do not retry a limit violation.
-- Retry transient source download failures with bounded attempts.
-- Retry storage upload failures with bounded attempts.
-- Retry worker startup failures outside the engine.
-- Do not blindly retry GPU out-of-memory errors with the same settings.
-- A failed job must clean local files and delete partial remote outputs.
-
-### 32.17 Cancellation and deadlines
-
-The engine should accept a cancellation token and deadline:
-
-```python
-engine.separate(..., cancellation_token=token, deadline=deadline)
-```
-
-Check them:
-
-- Before downloading the next source chunk.
-- Before starting each inference chunk.
-- After each inference chunk.
-- Before each encode operation.
-- Before uploading each result.
-
-Cancellation may not interrupt a single GPU kernel immediately. It must stop at the next safe boundary and report `CANCELED` rather than presenting partial output as complete.
-
-Every job needs:
-
-- Maximum wall-clock deadline.
-- Maximum source duration.
-- Maximum byte limit.
-- Maximum temporary disk budget.
-- Maximum output object budget.
-
-### 32.18 Determinism and reproducibility
-
-Record and pin:
-
-- Python version.
-- CUDA and PyTorch versions.
-- Separation package versions.
-- FFmpeg version.
-- Model repository commit.
-- Model checkpoint checksum.
-- Input checksum.
-- Preprocessing settings.
-- Chunk and overlap settings.
-- Precision policy.
-- GPU type.
-
-Where supported, configure deterministic behavior for evaluation. Production may use the fastest validated kernels if output quality remains stable, but the choice must be recorded.
-
-A model update is a new engine release. Never replace a checkpoint in place without changing the model revision and running the benchmark suite.
-
-### 32.19 Engine caching strategy
-
-Cache only data that is safe to share:
-
-Safe to cache:
-
-- Validated model checkpoints.
-- Read-only model configuration.
-- Static encoder configuration.
-
-Do not share between jobs:
-
-- Input tensors.
-- Output tensors.
-- Temporary audio files.
-- Signed URLs.
-- User-specific metadata.
-- Partial ZIP archives.
-
-Use a unique job namespace for all temporary and remote objects. Remove job data after the configured lifecycle window.
-
-### 32.20 Local CLI for development
-
-Provide a local command that exercises the same engine:
-
-```text
+```bash
 python -m worker.cli separate \
   --input ./fixtures/song.mp3 \
   --mode vocals_instrumental \
@@ -2916,91 +815,956 @@ python -m worker.cli separate \
   --output ./artifacts
 ```
 
-The CLI should support:
+The long-running loop should:
 
-- CPU mode for small test fixtures when feasible.
-- GPU mode for real performance tests.
-- JSON progress output for automation.
-- A dry-run validation command.
-- Printing model and preprocessing metadata.
-- No remote upload by default.
+1. Open the local database.
+2. Confirm model/configuration readiness.
+3. Find the oldest queued job.
+4. Atomically change it to processing.
+5. Run exactly one pipeline attempt.
+6. Persist progress and terminal state.
+7. Sleep briefly when no job exists.
+8. Handle SIGINT/SIGTERM by stopping after a safe boundary.
 
-The CLI is essential for debugging model quality without involving Vercel or a browser.
+A local health command should report whether FFmpeg, SQLite, Python packages, and
+model weights are usable.
 
-### 32.21 Engine test suite
+### 12.2 Demucs model integration
 
-Unit tests:
+Use a pinned Demucs-compatible dependency and an explicit model profile. The first
+profile should be selected based on local quality, runtime, memory, and license
+checks.
 
-- Model profile validation.
-- Router allowlist behavior.
-- Chunk position calculation.
-- Padding and trimming.
-- Overlap weighting.
-- Sample-count preservation.
-- Mixture-consistency math.
-- Filename sanitization.
-- Encoder argument construction.
-- Manifest schema.
-- Error classification.
+The adapter contract is:
 
-Audio regression tests:
+```text
+validate_profile(profile)
+load_model(profile, device)
+separate(input_waveform, profile, progress_callback, cancellation_checker)
+model_metadata(profile)
+```
 
-- Run a fixed legal fixture through each production profile.
-- Confirm expected stems exist.
-- Confirm durations match.
-- Confirm output files decode.
-- Compare checksums only when deterministic behavior is guaranteed.
-- Otherwise compare numerical/audio metrics with tolerances.
-- Detect unexpected loudness or peak changes.
+The rest of the pipeline must not depend on Demucs tensor details.
 
-Failure-injection tests:
+Recommended profile data:
 
-- Corrupt source.
-- Download timeout.
-- Missing model checkpoint.
-- Bad checkpoint checksum.
-- GPU out-of-memory.
-- FFmpeg failure.
-- Storage upload failure.
-- Callback failure.
-- Cancellation during each major stage.
+```text
+profile_id
+model_id
+model_revision
+checkpoint_identifier
+checkpoint_checksum
+expected_stems
+sample_rate
+channels
+device_policy
+chunk_length
+overlap
+batch_size
+precision_policy
+license_reference
+```
 
-Performance tests:
+Do not silently download arbitrary model weights. A model checkpoint must be
+allowlisted and checksum-verified. Cache it under the local models directory.
 
-- 30-second, 3-minute, and maximum supported fixtures.
-- Cold and warm model load.
-- Each separation mode.
-- Each output format.
-- One and multiple concurrent jobs.
-- Peak RAM, VRAM, disk, and total time.
+### 12.3 Device selection
 
-### 32.22 Engine release gates
+Support explicit device selection:
 
-A model or engine release may ship only when:
+```text
+STEMIFY_DEVICE=auto
+STEMIFY_DEVICE=cpu
+STEMIFY_DEVICE=cuda
+```
 
-- The worker image builds from pinned dependencies.
-- The model checkpoint checksum matches the release record.
-- All unit and integration tests pass.
-- Every output format passes decode validation.
-- No stem has a sample-count or duration mismatch.
-- No new clipping, NaN, or infinity issue is present.
-- Quality evaluation is equal to or better than the current profile, or the tradeoff is explicitly approved.
-- Warm-run p90 meets the current time budget.
-- Cold-start behavior is within the documented operational budget.
-- The license and attribution records are complete.
-- Rollback to the previous validated profile has been tested.
+`auto` should select CUDA when a validated CUDA/PyTorch environment is available,
+otherwise CPU. Startup must clearly report the selected device.
 
-### 32.23 Engine acceptance criteria
+Do not claim CPU performance is suitable for maximum-length tracks until measured.
+A CPU mode is useful for short fixtures and development.
 
-- The engine separates a supported input into the expected named stems.
-- The default mode is optimized for vocals/instrumental simplicity and quality.
-- The model is loaded once per warm worker container.
-- Chunking and overlap-add preserve the full track without audible boundary defects in regression tests.
-- Output stems remain aligned and have matching duration.
-- All five requested formats can be produced from one separation pass.
-- Output artifacts are validated before upload.
-- Partial failures do not produce misleading completed jobs.
-- Cancellation and deadline checks work at safe boundaries.
-- Model revisions and processing parameters are reproducible.
-- The engine can be executed locally independently from Vercel.
-- A new model can be added behind an adapter and profile without rewriting the API or UI.
+### 12.4 Audio preprocessing
+
+The worker must:
+
+1. Resolve the source path inside its expected local root.
+2. Check file size before invoking tools.
+3. Run `ffprobe` with structured JSON output.
+4. Confirm an audio stream exists.
+5. Reject video-only, image-only, subtitle-only, empty, and corrupt inputs.
+6. Enforce duration, channel, and sample-rate policy.
+7. Decode using FFmpeg argument arrays, never shell interpolation.
+8. Convert to the model's required sample rate and channel layout.
+9. Preserve source duration and timing metadata.
+10. Calculate an input checksum for diagnostics.
+
+Use a unique per-job temporary directory and clean it in `finally` handling.
+
+### 12.5 Inference
+
+Prefer the selected Demucs library's maintained inference path, including its
+recommended chunking and overlap behavior. Do not implement custom stitching until
+there is a measured need.
+
+Inference requirements:
+
+- Evaluation mode.
+- Inference-only execution.
+- Float32 baseline before mixed precision.
+- Bounded memory use.
+- Shape and sample-count validation for every stem.
+- NaN, infinity, and unexpected clipping detection.
+- Progress updates at meaningful chunk/stage boundaries.
+- Cancellation checks before and after each chunk.
+- Per-job tensor cleanup after success and failure.
+
+For two-source mode, the adapter must document whether instrumental is a direct
+model output or mixture minus vocals. Use one fixed policy per profile.
+
+### 12.6 Output encoding
+
+Encode from validated high-quality temporary WAV masters:
+
+```text
+model output
+  -> validated WAV masters
+  -> selected encoder
+  -> ffprobe validation
+  -> checksum
+  -> final output files
+```
+
+Initial format policy:
+
+```text
+mp3 -> LAME, documented high-quality bitrate
+wav  -> PCM, documented bit depth and sample rate
+flac -> lossless compression
+ogg  -> documented Vorbis or Opus policy
+m4a  -> AAC in an M4A container, documented bitrate
+```
+
+Keep all encoder commands in one module. Use subprocess argument arrays and capture
+stderr only for private diagnostics.
+
+### 12.7 Packaging
+
+Create:
+
+- One output file per stem.
+- One ZIP containing the selected-format stems.
+- One `manifest.json` inside the ZIP.
+
+The manifest must contain:
+
+- Schema version.
+- Job ID.
+- Sanitized source display name.
+- Source duration, sample rate, and channels.
+- Separation mode.
+- Model ID and revision.
+- Selected format.
+- Stem names, durations, and checksums.
+- Mixture-consistency setting if applicable.
+
+Never include absolute paths, session tokens, local secrets, raw source URLs, or
+internal diagnostic details in the manifest.
+
+Only move artifacts from a temporary directory to the final output directory after
+all validation succeeds. A partial output must never make a job look completed.
+
+## 13. Progress and State Management
+
+### 13.1 Stage mapping
+
+Internal stages:
+
+```text
+starting
+validating
+audio_preparation
+separating
+encoding
+packaging
+cleanup
+completed
+```
+
+YouTube jobs may include `downloading` before validation.
+
+Suggested progress mapping:
+
+```text
+queued: 0
+starting: 5
+validating: 15
+audio_preparation: 25
+separating: 30-75
+encoding: 75-90
+packaging: 90-98
+completed: 100
+```
+
+If reliable chunk progress is unavailable, show stage progress or an indeterminate
+indicator instead of pretending to know an exact percentage.
+
+### 13.2 State transitions
+
+```text
+queued
+  -> processing
+  -> completed
+  -> expired
+
+queued
+  -> canceled
+
+processing
+  -> completed
+  -> failed
+  -> canceled
+  -> expired
+```
+
+No terminal state may move backward. Repeated writes for the current state must be
+safe. The worker must recover jobs left in `processing` after an abnormal shutdown:
+
+- On startup, find stale processing jobs.
+- Determine whether their process heartbeat is still valid.
+- Mark stale jobs failed with a worker-restarted code or requeue them once.
+- Never leave an indefinite spinner.
+
+### 13.3 Worker coordination
+
+Use SQLite as the queue. The simplest acceptable design is a polling worker with a
+short interval. An optional local notification mechanism may reduce polling, but it
+must not be required for correctness.
+
+The web app creates jobs; the worker claims them. The web app must not spawn a new
+Demucs process for every browser request.
+
+## 14. Security and Privacy
+
+### 14.1 Local network security
+
+- Bind the web app to localhost by default.
+- Bind any worker HTTP endpoint to localhost only.
+- Do not expose the app to a LAN without an explicit opt-in.
+- Keep all secrets in environment variables or ignored local files.
+- Use secure HTTP-only cookies where applicable.
+- Add CSRF protection for cookie-authenticated mutations if the app is ever exposed
+  beyond localhost.
+- Limit JSON and multipart request sizes.
+- Do not log audio contents, credentials, signed values, or unnecessary URLs.
+
+### 14.2 Filesystem security
+
+- Use server-generated IDs for all storage directories.
+- Resolve and validate every path against its expected root.
+- Strip path separators and control characters from display names.
+- Never execute uploaded files.
+- Use subprocess argument arrays.
+- Do not construct shell commands using filenames or URLs.
+- Keep runtime data outside source-controlled directories when possible.
+- Do not expose absolute local paths in browser responses.
+
+### 14.3 Model and dependency security
+
+- Pin Python, PyTorch, Demucs-compatible libraries, and FFmpeg expectations.
+- Verify model checkpoint checksums.
+- Keep model weights outside Git.
+- Record model and dependency versions in diagnostics and manifests where safe.
+- Review model and weight licenses before redistribution or commercial use.
+
+### 14.4 Privacy
+
+The local UI should clearly state:
+
+- Files are processed on this computer.
+- Files are stored under the configured local data directory.
+- Generated files remain until the local retention cleanup removes them or the user
+  deletes them.
+- Optional YouTube importing requires network access.
+- The application does not upload files to a remote processing service in the local
+  mode.
+
+Provide a local cleanup command or UI action that removes source files, outputs,
+and job metadata according to the configured policy.
+
+## 15. Environment and Configuration
+
+Use `.env.example` with local-only values:
+
+```text
+# Local paths
+STEMIFY_DATA_DIR=./data
+STEMIFY_LOG_DIR=./data/logs
+
+# Local web server
+PORT=3000
+HOSTNAME=127.0.0.1
+
+# Local processing
+STEMIFY_DEVICE=auto
+STEMIFY_MODEL_PROFILE=demucs_default
+STEMIFY_MODEL_DIR=./data/models
+STEMIFY_WORKER_POLL_MS=500
+STEMIFY_WORKER_MAX_JOBS=1
+
+# Product limits
+MAX_UPLOAD_BYTES=104857600
+MAX_DURATION_SECONDS=480
+MAX_FULL_STEMS_DURATION_SECONDS=360
+JOB_RETENTION_HOURS=24
+MAX_ACTIVE_JOBS=1
+
+# Local session signing
+JOB_ACCESS_TOKEN_SECRET=replace-with-a-long-random-local-value
+```
+
+No cloud provider credentials, database URLs, worker launch URLs, callback secrets,
+or storage access keys belong in the local configuration.
+
+If a value is required, startup should validate it and explain the problem. Never
+use an empty production-style secret silently.
+
+## 16. `start.sh` Requirements
+
+`start.sh` is the primary entrypoint and must be treated as part of the product.
+
+### 16.1 Startup checks
+
+It must verify:
+
+- It is being run from or can locate the repository root.
+- `node` and `npm` exist.
+- Python 3.12 or the supported local version exists.
+- `ffmpeg` and `ffprobe` exist on PATH or in the documented local binary path.
+- `node_modules` exists and includes the web dependencies.
+- The Python environment can import the worker runtime dependencies.
+- The configured Demucs model profile is valid.
+- The model checkpoint is available or the setup message explains how to prepare it.
+- The configured data directory is writable.
+- The web port is available.
+
+Checks must fail with concise, actionable instructions. Do not automatically install
+packages, modify global Python environments, or download model weights without an
+explicit setup command.
+
+### 16.2 Process management
+
+The script must:
+
+1. Create local runtime directories.
+2. Run or verify local database migrations.
+3. Start the worker in the background.
+4. Start the Next.js development server.
+5. Print the URL and log paths.
+6. Trap `INT`, `TERM`, and normal exit.
+7. Terminate the worker and web child processes on shutdown.
+8. Return a failure exit code if either required process exits unexpectedly.
+
+Use portable POSIX shell syntax compatible with the repository's supported shell
+environment. Keep process IDs private to the script and logs.
+
+### 16.3 Developer commands
+
+These commands should remain available in addition to `start.sh`:
+
+```bash
+./start.sh
+npm run dev -w apps/web
+python -m worker.job_loop
+python -m worker.cli health
+python -m worker.cli separate --input ./fixtures/song.mp3 --mode vocals_instrumental --format mp3 --output ./artifacts
+python -m worker.cli cleanup
+```
+
+`start.sh` is the normal path. The separate commands are for diagnosis and tests.
+
+## 17. Testing Strategy
+
+### 17.1 Web tests
+
+Cover:
+
+- Upload request validation.
+- Filename and size policy.
+- Mode and output-format validation.
+- Guest/session ownership.
+- Job idempotency.
+- Local path authorization.
+- Job state transition mapping.
+- Public error mapping.
+- Download authorization.
+- Retry and cancellation behavior.
+
+### 17.2 Worker unit tests
+
+Cover:
+
+- `ffprobe` parsing.
+- Size, duration, channel, and codec rejection.
+- Source path containment.
+- Temporary directory cleanup.
+- Model profile allowlisting.
+- Device selection.
+- Demucs adapter output mapping.
+- Chunk planning and sample-count preservation.
+- Encoder command construction.
+- Output validation.
+- ZIP and manifest construction.
+- Cancellation and deadline checks.
+- Stable error classification.
+
+### 17.3 Local integration tests
+
+Use a temporary data directory and SQLite database. Do not require a cloud service.
+
+Verify:
+
+1. A fixture uploads through the web API.
+2. A job is created.
+3. The worker claims the job.
+4. Progress is persisted.
+5. A legal fixture produces expected stems.
+6. Encoded results decode successfully.
+7. The ZIP contains only expected files and a manifest.
+8. The result page can preview and download outputs.
+9. Cancellation removes partial output.
+10. A worker restart repairs stale jobs.
+11. Unauthorized sessions cannot read another job's outputs.
+
+Use a fake or stub model for fast control-plane tests and a short real Demucs
+fixture for scheduled/local engine tests.
+
+### 17.4 Startup smoke test
+
+On a clean local setup:
+
+1. Run `./start.sh`.
+2. Confirm both processes start.
+3. Open `http://localhost:3000`.
+4. Upload a short legal fixture.
+5. Create a vocals/instrumental MP3 job.
+6. Observe progress.
+7. Preview both stems.
+8. Download one stem and the ZIP.
+9. Stop the script.
+10. Confirm both processes stop.
+11. Start again and confirm the job metadata/results remain readable.
+
+### 17.5 Accessibility tests
+
+Verify keyboard-only upload, focus recovery, screen-reader status announcements,
+error announcements, reduced motion, mobile viewport behavior, and audio control
+accessibility.
+
+## 18. Model Evaluation and Performance
+
+Before enabling a profile by default:
+
+1. Select legally usable local fixtures across representative genres.
+2. Include dense mixes, sparse mixes, stereo-width variation, backing vocals, and
+   percussion-heavy material.
+3. Run the same preprocessing and output settings for every candidate profile.
+4. Evaluate vocal bleed, musical artifacts, transient damage, and residuals.
+5. Measure CPU time, GPU time, peak RAM, peak VRAM, and disk use.
+6. Check model and weight licenses.
+7. Pin the selected profile and checkpoint checksum.
+8. Record results in local documentation.
+
+Benchmark at least:
+
+- 30-second fixture.
+- 3-minute fixture.
+- Maximum supported fixture.
+- Mono and stereo input.
+- MP3 and lossless input.
+- CPU mode.
+- CUDA mode when available.
+- Cold model load.
+- Warm model run.
+- Every enabled output format.
+
+Use measurements to set duration limits and progress expectations. Do not enable
+full-stem mode if it is not reliable on the supported local hardware profile.
+
+## 19. Observability and Operations
+
+Observability is local and diagnostic rather than cloud-based.
+
+### 19.1 Logs
+
+Write structured or consistently formatted logs to `data/logs/` with:
+
+- Event.
+- Public job ID.
+- Stage.
+- Status.
+- Duration.
+- Device.
+- Model profile and revision.
+- Error code.
+- Diagnostic reference.
+
+Never log raw audio, credentials, session cookies, absolute paths, or full private
+source URLs unless explicitly needed for local debugging.
+
+### 19.2 Health and diagnostics
+
+`python -m worker.cli health` should report:
+
+- Python version.
+- FFmpeg/FFprobe availability and versions.
+- PyTorch version.
+- Demucs package availability.
+- CUDA availability and device name.
+- Model profile readiness and checkpoint checksum.
+- Data-directory writability.
+- SQLite connectivity.
+
+The web app may show a non-sensitive worker-unavailable state when the worker is
+not running.
+
+### 19.3 Cleanup
+
+Provide an idempotent local cleanup operation that:
+
+1. Finds expired jobs and abandoned uploads.
+2. Deletes source files and result files.
+3. Removes stale temporary directories.
+4. Marks metadata expired or deleted.
+5. Reports failures in local logs.
+
+Do not delete model checkpoints as part of ordinary job cleanup.
+
+## 20. Implementation Task Breakdown
+
+The repository currently has Tasks 1–8 substantially represented, with Task 8 as
+the latest completed worker foundation. **Task 9 is the next major implementation
+step.** The following task list replaces the old cloud deployment sequence.
+
+### Phase 1: Local foundation
+
+#### Task 1: Local repository and startup foundation
+
+Work:
+
+- Keep the npm workspace and Python worker.
+- Update root README and `.env.example` for local-only operation.
+- Rewrite `start.sh` to validate prerequisites and launch web plus worker.
+- Add local data-directory initialization.
+- Remove cloud deployment assumptions from setup documentation.
+
+Acceptance:
+
+- `./start.sh` starts both required processes after prerequisites are present.
+- Missing prerequisites produce actionable errors.
+- Stopping the script stops both processes.
+
+#### Task 2: Define shared contracts
+
+Work:
+
+- Keep JSON schemas for job requests, status, and manifests.
+- Remove remote callback-specific requirements from the primary local flow.
+- Add local worker/job state fields where needed.
+- Keep web and worker enum parity tests.
+
+Acceptance:
+
+- Web and worker agree on status, stage, mode, format, stem, and error values.
+- Invalid requests and manifests are rejected.
+
+#### Task 3: Replace hosted database assumptions with local SQLite
+
+Work:
+
+- Use SQLite and local migrations.
+- Configure WAL mode, foreign keys, busy timeout, and short transactions.
+- Add jobs, outputs, and optional local job-events tables.
+- Add atomic queued-job claiming.
+- Remove the required `DATABASE_URL` dependency.
+
+Acceptance:
+
+- A clean local data directory initializes without an external database.
+- Web and worker can safely read and update the same database.
+- A concurrent claim cannot process one job twice.
+
+### Phase 2: Local storage and web flow
+
+#### Task 4: Implement local filesystem storage
+
+Work:
+
+- Add server-owned upload, job, output, model, and log directories.
+- Add path containment helpers.
+- Replace presigned upload assumptions with a local multipart upload route.
+- Add local authorized file streaming.
+- Add cleanup helpers.
+
+Acceptance:
+
+- Files remain on the local filesystem.
+- No absolute paths reach the browser.
+- Path traversal and unauthorized output access are rejected.
+
+#### Task 5: Complete the upload UI
+
+Work:
+
+- Connect the dropzone to the local upload route.
+- Start job creation after upload completion.
+- Add real separation mode state.
+- Add output format state.
+- Add upload progress, retry, remove, and error behavior.
+
+Acceptance:
+
+- A valid local file can be uploaded and turned into a queued job.
+- Invalid files show useful errors.
+- The UI navigates to the job page after creation.
+
+#### Task 6: Implement local job creation and queueing
+
+Work:
+
+- Validate source ownership and metadata.
+- Add idempotency handling with a database-safe insert strategy.
+- Enforce active-job limits.
+- Create queued jobs without waiting for inference.
+- Add cancellation and retry request handling.
+
+Acceptance:
+
+- Repeated requests do not create duplicate jobs.
+- A queued job is visible to the worker.
+- Jobs cannot be created from arbitrary local paths.
+
+#### Task 7: Complete status, progress, and result pages
+
+Work:
+
+- Keep refresh-safe polling.
+- Align API responses with the shared status schema.
+- Add cancellation UI.
+- Add result previews and download controls once outputs exist.
+- Map worker errors to safe user messages.
+
+Acceptance:
+
+- The page reflects SQLite state changes.
+- Polling stops for every terminal state.
+- Failure and cancellation states are understandable.
+
+### Phase 3: Real local separation engine
+
+#### Task 8: Complete local audio validation pipeline
+
+Status: substantially complete in the current repository.
+
+Keep and finish:
+
+- FFmpeg/FFprobe discovery.
+- Actual media validation.
+- Size, duration, channel, and extension checks.
+- Canonical decoding.
+- Unique temp directories.
+- Cleanup on success and failure.
+
+Acceptance:
+
+- Valid fixtures pass.
+- Corrupt, empty, oversized, over-duration, and unsupported files fail with stable
+  codes.
+
+#### Task 9: Integrate and validate Demucs
+
+This is the next major task.
+
+Work:
+
+- Add pinned runtime dependencies and a supported Python environment.
+- Add a Demucs adapter behind the separation interface.
+- Add a validated default model profile.
+- Add local model cache and checksum verification.
+- Add CPU and CUDA device selection.
+- Run a short legal fixture through real inference.
+- Record model, license, quality, memory, and timing results.
+
+Acceptance:
+
+- A supported input produces correctly named stems.
+- The model profile is allowlisted and reproducible.
+- Warm model reuse works within the worker process.
+- Full-stem mode is only enabled if it passes benchmarks.
+
+#### Task 10: Implement encoding and packaging
+
+Work:
+
+- Implement MP3, WAV, FLAC, OGG, and M4A encoders.
+- Validate encoded output with FFprobe.
+- Create individual stem artifacts.
+- Create ZIP archives and schema-valid manifests.
+- Remove partial artifacts on failures.
+
+Acceptance:
+
+- Every enabled format decodes successfully.
+- Stem durations remain aligned.
+- ZIP contents are deterministic and contain only expected files.
+
+#### Task 11: Implement the local worker loop
+
+Work:
+
+- Add SQLite queue polling and atomic job claiming.
+- Connect validation, Demucs, encoding, and packaging into one pipeline.
+- Persist progress and terminal state.
+- Add cancellation checks.
+- Recover stale jobs after worker restart.
+- Add direct CLI health and one-shot processing commands.
+
+Acceptance:
+
+- The worker processes a queued job without a remote service.
+- Progress appears on the web page.
+- A failed job does not remain indefinitely processing.
+- `python -m worker.job_loop` can run independently.
+
+### Phase 4: Results and hardening
+
+#### Task 12: Build local previews and downloads
+
+Work:
+
+- Add authorized individual stem streaming.
+- Add authorized ZIP download.
+- Add native audio previews.
+- Add expiry and missing-file handling.
+- Add cleanup of partial outputs.
+
+Acceptance:
+
+- Users can preview and download every completed stem.
+- Unauthorized sessions cannot read outputs.
+- Missing files result in a clear expired/unavailable state.
+
+#### Task 13: Add local cleanup and limits
+
+Work:
+
+- Add active-job limits.
+- Add abandoned upload cleanup.
+- Add result retention cleanup.
+- Add stale-job recovery.
+- Add local worker unavailable messaging.
+- Add a manual cleanup command.
+
+Acceptance:
+
+- The local data directory does not grow without bounds during normal use.
+- Cleanup is retryable and safe to run repeatedly.
+
+#### Task 14: Add optional YouTube input
+
+Work:
+
+- Add secondary URL input.
+- Validate approved hostnames.
+- Add controlled local `yt-dlp` download.
+- Apply strict size, duration, timeout, and media checks.
+- Add policy acknowledgement.
+
+Acceptance:
+
+- Valid supported URLs work when network access is available.
+- Unsupported or restricted sources fail safely.
+- The upload flow remains the default and does not depend on YouTube.
+
+### Phase 5: Verification and local release
+
+#### Task 15: Add local integration and startup tests
+
+Work:
+
+- Add temporary-data integration tests.
+- Add fake-model control-plane tests.
+- Add short real-engine fixture tests.
+- Add startup smoke tests.
+- Add authorization, cancellation, restart, and cleanup tests.
+
+Acceptance:
+
+- A clean local setup passes the complete upload-to-download flow.
+- Tests do not require cloud credentials or paid infrastructure.
+
+#### Task 16: Run performance and model benchmarks
+
+Work:
+
+- Measure CPU and CUDA processing.
+- Measure cold and warm model runs.
+- Measure all enabled formats.
+- Record RAM, VRAM, disk, and total time.
+- Set supported duration limits from evidence.
+
+Acceptance:
+
+- Local performance expectations are documented.
+- Default model and device policy are reproducible.
+- Unsupported hardware receives a clear setup or limit message.
+
+#### Task 17: Complete local security and privacy review
+
+Work:
+
+- Review path containment and upload handling.
+- Review cookie/session authorization.
+- Review localhost binding.
+- Review subprocess arguments and URL handling.
+- Review logs and runtime data exclusions.
+- Confirm model and dependency licenses.
+- Document local data deletion behavior.
+
+Acceptance:
+
+- No known critical local file disclosure or command-injection issue remains.
+- Runtime data and model weights are not committed.
+- Privacy and content-policy behavior is documented.
+
+## 21. Checkpoints
+
+### Checkpoint A: Local foundation
+
+- Repository installs without cloud credentials.
+- Web lint and typecheck pass.
+- Worker tests and lint pass.
+- SQLite initializes locally.
+- `start.sh` validates and starts both processes.
+
+### Checkpoint B: Local control-plane vertical slice
+
+- A local upload creates a queued job.
+- The worker can claim a job.
+- Polling shows persisted progress.
+- Cancellation and restart behavior work.
+- Fake or stub processing reaches a result page.
+
+### Checkpoint C: Real Demucs vertical slice
+
+- A legal fixture runs through Demucs locally.
+- Vocals and instrumental outputs are produced.
+- Output files decode and have aligned durations.
+- Results are visible through the local UI.
+- CPU/CUDA behavior and model metadata are recorded.
+
+### Checkpoint D: Local MVP
+
+- All enabled output formats work.
+- Full-stem mode is enabled only if benchmarked.
+- Previews and ZIP downloads work.
+- Cleanup and stale-job recovery work.
+- Access control and path traversal tests pass.
+- `start.sh` is the documented normal launch path.
+
+### Checkpoint E: Optional feature completion
+
+- YouTube mode passes URL, media, timeout, and policy checks.
+- Local performance limits are documented.
+- Accessibility and startup smoke tests pass.
+- The application remains usable without YouTube or cloud services.
+
+## 22. Risks and Mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Demucs is too slow on local CPU | High | Prefer CUDA when available, benchmark early, keep duration limits conservative |
+| GPU/PyTorch environment is difficult to install | High | `start.sh` verifies prerequisites and prints exact setup guidance; provide CPU fixtures |
+| Model weights are missing | High | Health check, explicit cache path, checksum verification, clear preparation command |
+| Local disk fills with audio/results | High | Size limits, retention cleanup, cleanup command, disk-budget checks |
+| Worker crashes during inference | High | Stale-job recovery, structured error state, unique temp directories |
+| Web and worker race for SQLite jobs | High | WAL mode, busy timeout, atomic claim transaction, short transactions |
+| User accesses another local job URL | Medium | Signed session ownership and authorization on status/download routes |
+| Path traversal through filenames or download parameters | High | Server-owned IDs, containment checks, stored output metadata, sanitized names |
+| FFmpeg or codec differences across machines | Medium | Health check, pinned/documented expectations, output FFprobe validation |
+| Model quality varies by genre | High | Legal fixture suite, listening review, conservative mode enablement |
+| Optional YouTube behavior changes | Medium | Keep upload primary, pin/update downloader deliberately, fail safely |
+| User expects hosted access | Medium | Clearly label local-only behavior and local data retention in the UI |
+| Localhost is exposed unintentionally | Medium | Bind to `127.0.0.1` by default and document any LAN opt-in separately |
+
+## 23. Definition of Done for the Local Core Product
+
+The local core product is done when:
+
+- A user can run `./start.sh` after installing documented prerequisites.
+- The script starts both the Next.js web app and the Python worker.
+- Missing prerequisites produce actionable errors instead of mysterious failures.
+- The home page immediately presents local audio upload.
+- A valid source is stored locally and never requires cloud storage.
+- The user can choose a validated separation mode and one output format.
+- A job is created exactly once for a repeated request.
+- The Python worker claims and processes the job locally with Demucs.
+- Progress is persisted and survives browser refresh.
+- Every generated stem has valid timing and decodes successfully.
+- The user can preview individual stems and download a ZIP.
+- Cancellation and worker restart do not create misleading completed jobs.
+- Failures are understandable and do not expose tracebacks or local secrets.
+- Local filesystem paths and job outputs are authorized.
+- Temporary files and expired results can be cleaned up.
+- Model versions, dependencies, and processing settings are recorded.
+- Performance limits are based on measurements for supported hardware.
+- The entire core workflow works without Vercel, Modal, Supabase, Neon, R2, S3,
+  Postgres, webhooks, or hosted infrastructure.
+
+## 24. Recommended Build Order From the Current Repository
+
+The repository is currently strongest around shared contracts, database metadata,
+storage abstractions, UI scaffolding, and Task 8 audio validation. The fastest path
+to the new goal is:
+
+1. Replace the hosted Postgres assumptions with local SQLite.
+2. Replace presigned/object-storage upload with local multipart upload and filesystem
+   storage.
+3. Finish the home-page state flow so upload completion creates a job and navigates
+   to the job page.
+4. Implement the SQLite worker queue and a fake processing path.
+5. Implement the local `start.sh` prerequisite checks and process management.
+6. Implement Task 9: integrate and benchmark Demucs.
+7. Implement encoding, packaging, previews, and downloads.
+8. Add cancellation, stale-job recovery, cleanup, and local authorization.
+9. Enable full-stem mode only after benchmark approval.
+10. Add YouTube last, as an optional local feature.
+
+The immediate engineering milestone is therefore:
+
+> **Local Checkpoint B: upload → SQLite job → local worker claim → persisted status**
+
+The next feature milestone after that is:
+
+> **Task 9: real Demucs inference in the local worker**
+
+## 25. Current Repository Status
+
+At the time this plan was changed:
+
+- Task 1 is partially complete.
+- Task 2 is substantially complete.
+- Task 3 is partially complete but still assumes hosted Postgres and needs the local
+  SQLite conversion.
+- Task 4 is partially complete but still assumes cloud-style storage APIs and needs
+  the local filesystem implementation.
+- Task 5 is partial; the upload UI is not fully connected to job creation.
+- Task 6 is partial; queued jobs are created but are not processed.
+- Task 7 is partial; polling/page scaffolding exists but no worker updates jobs.
+- Task 8 is substantially complete and tested.
+- **Task 9 is the next major task: Demucs model integration.**
+- Tasks 10–17 remain to be implemented or adapted for local execution.
+
+The old deployment-specific tasks are intentionally removed rather than deferred:
+there is no Modal integration phase, no hosted-storage phase, no production deploy
+phase, and no cloud callback phase in the local plan.
