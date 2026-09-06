@@ -1,0 +1,99 @@
+import assert from "node:assert/strict";
+import { after, before, describe, it } from "node:test";
+
+/**
+ * Job creation integration tests (Task 6 acceptance criteria).
+ * Requires DATABASE_URL; uses the in-memory fake storage automatically
+ * (no STORAGE_* env vars in tests).
+ */
+import { eq } from "drizzle-orm";
+
+process.env.JOB_ACCESS_TOKEN_SECRET ??= "test-secret-for-local-tests-only";
+
+import { db, sql } from "@/lib/db/client";
+import { jobs } from "@/lib/db/schema";
+import { FakeStorage } from "@/lib/storage/fake";
+import { createJob } from "@/lib/jobs";
+
+const OWNER = "gid_testowner0000000001";
+const UPLOAD_ID = `upl_${crypto.randomUUID().replaceAll("-", "")}`;
+const OBJECT_KEY = `sources/${UPLOAD_ID}/song.mp3`;
+
+const validBody: Record<string, unknown> = {
+  source: { type: "upload", uploadId: UPLOAD_ID, objectKey: OBJECT_KEY, filename: "song.mp3" },
+  mode: "vocals_instrumental",
+  outputFormat: "mp3",
+  idempotencyKey: "client-key-0123456789abcdef",
+};
+
+describe("createJob", () => {
+  before(async () => {
+    const storage = new FakeStorage();
+    // Inject as the process-wide adapter for the duration of the test.
+    const { __setStorageForTests } = await import("@/lib/storage/index");
+    __setStorageForTests(storage);
+    storage.put(OBJECT_KEY, Buffer.alloc(2048));
+  });
+
+  after(async () => {
+    await db.delete(jobs).where(eq(jobs.ownerKey, OWNER));
+    await sql.end();
+  });
+
+  it("creates a queued job for a valid uploaded object", async () => {
+    const result = await createJob({ ownerKey: OWNER, body: structuredClone(validBody) });
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.status, 201);
+      assert.match(result.job.id, /^job_[a-f0-9]{32}$/);
+      assert.equal(result.job.status, "queued");
+    }
+  });
+
+  it("returns the same job for a repeated idempotency key", async () => {
+    const body = { ...structuredClone(validBody), idempotencyKey: "client-key-repeat-000000001" };
+    const first = await createJob({ ownerKey: OWNER, body });
+    const second = await createJob({ ownerKey: OWNER, body: structuredClone(body) });
+    assert.equal(first.ok && second.ok, true);
+    if (first.ok && second.ok) {
+      assert.equal(first.status, 201);
+      assert.equal(second.status, 200);
+      assert.equal(first.job.id, second.job.id);
+    }
+  });
+
+  it("rejects invalid modes and formats", async () => {
+    const bad = { ...structuredClone(validBody), mode: "karaoke" };
+    const result = await createJob({ ownerKey: OWNER, body: bad });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.status, 400);
+  });
+
+  it("rejects object keys outside the caller's upload session", async () => {
+    const evil = structuredClone(validBody) as { source: Record<string, unknown> };
+    evil.source.objectKey = "sources/upl_ffffffffffffffffffffffffffffffff/other.mp3";
+    const result = await createJob({ ownerKey: OWNER, body: evil });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.status, 403);
+  });
+
+  it("rejects uploads whose object never arrived", async () => {
+    const missing = structuredClone(validBody) as Record<string, Record<string, unknown>> & {
+      idempotencyKey: string;
+    };
+    missing.idempotencyKey = "client-key-ffffffffffffffff";
+    missing.source.uploadId = `upl_${crypto.randomUUID().replaceAll("-", "")}`;
+    missing.source.objectKey = `sources/${missing.source.uploadId}/song.mp3`;
+    const result = await createJob({ ownerKey: OWNER, body: missing });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.status, 409);
+  });
+
+  it("rejects YouTube URLs outside the allowlisted hosts", async () => {
+    const evil = structuredClone(validBody) as { source: Record<string, unknown> };
+    evil.source = { type: "youtube", url: "https://evil.example.com/watch?v=x" };
+    const result = await createJob({ ownerKey: OWNER, body: evil });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.status, 400);
+  });
+});

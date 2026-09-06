@@ -26,3 +26,8 @@ export function getStorage(): StorageAdapter {
       : new FakeStorage();
   return instance;
 }
+
+/** Test-only seam: force a specific adapter instance. */
+export function __setStorageForTests(adapter: StorageAdapter): void {
+  instance = adapter;
+}
