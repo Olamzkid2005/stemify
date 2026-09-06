@@ -22,6 +22,11 @@ out/
 *.th
 modal-volume/
 
+# Agent skill/tool directories
+.agents/
+.claude/
+skills-lock.json
+
 # OS and editor noise
 .DS_Store
 Thumbs.db

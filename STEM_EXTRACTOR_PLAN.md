@@ -202,7 +202,7 @@ Responsibilities:
 
 ### 6.3 Database
 
-Use a managed Postgres database suitable for Vercel serverless access. Neon is the planned provider because it supports serverless connections and branching for development/staging.
+Use a managed Postgres database suitable for Vercel serverless access. Supabase is the selected provider; connect through its transaction pooler (port 6543) so serverless functions do not exhaust connections.
 
 The database stores metadata and state, not large audio files.
 
@@ -1378,7 +1378,7 @@ Work:
 - Scaffold the Next.js app.
 - Add TypeScript, Tailwind, shadcn/ui, linting, and formatting.
 - Add the Python worker project with pinned dependencies (pip + venv).
-- Use npm workspaces for the monorepo and Drizzle with the Neon serverless driver for database access.
+- Use npm workspaces for the monorepo and Drizzle ORM against Supabase Postgres (transaction pooler connection).
 - Add root documentation and environment templates.
 
 Acceptance criteria:
