@@ -39,11 +39,16 @@ def make_audio(path: Path, seconds: float, kind: str = "sine") -> None:
         raise ValueError(kind)
     cmd = [
         FFMPEG,  # type: ignore[list-item]
-        "-v", "error",
-        "-f", "lavfi",
-        "-i", src,
-        "-c:a", "libmp3lame",
-        "-b:a", "128k",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        src,
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "128k",
         str(path),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
@@ -112,9 +117,12 @@ def test_over_duration_real(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     long = tmp_path / "long.wav"
     cmd = [
         FFMPEG,  # type: ignore[list-item]
-        "-v", "error",
-        "-f", "lavfi",
-        "-i", "sine=frequency=440:duration=9",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=9",
         str(long),
     ]
     subprocess.run(cmd, check=True, capture_output=True)

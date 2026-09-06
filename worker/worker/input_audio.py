@@ -59,9 +59,7 @@ def _require_ffmpeg_tool(name: str) -> str:
         return str(vendored)
     path = shutil.which(name)
     if not path:
-        raise InputAudioError(
-            ErrorCode.UNKNOWN, f"{name} is not installed on this machine"
-        )
+        raise InputAudioError(ErrorCode.UNKNOWN, f"{name} is not installed on this machine")
     return path
 
 
@@ -81,8 +79,10 @@ def run_ffprobe(path: Path) -> ProbeResult:
     ffprobe = _require_ffmpeg_tool("ffprobe")
     cmd = [
         ffprobe,
-        "-v", "error",
-        "-print_format", "json",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
         "-show_format",
         "-show_streams",
         str(path),
@@ -168,13 +168,19 @@ def decode_to_canonical_wav(source: Path, dest_wav: Path) -> None:
     dest_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         ffmpeg,
-        "-v", "error",
-        "-i", str(source),
+        "-v",
+        "error",
+        "-i",
+        str(source),
         "-vn",  # drop any cover-art video stream
-        "-ar", str(CANONICAL_SAMPLE_RATE),
-        "-ac", str(CANONICAL_CHANNELS),
-        "-c:a", "pcm_f32le",
-        "-f", "wav",
+        "-ar",
+        str(CANONICAL_SAMPLE_RATE),
+        "-ac",
+        str(CANONICAL_CHANNELS),
+        "-c:a",
+        "pcm_f32le",
+        "-f",
+        "wav",
         str(dest_wav),
     ]
     try:
@@ -194,9 +200,7 @@ def prepare_source(source: Path, job_dir: Path) -> tuple[Path, ProbeResult]:
     resolved = source.resolve()
     job_resolved = job_dir.resolve()
     if job_resolved not in resolved.parents:
-        raise InputAudioError(
-            ErrorCode.INVALID_AUDIO, "source path escapes the job directory"
-        )
+        raise InputAudioError(ErrorCode.INVALID_AUDIO, "source path escapes the job directory")
     if not resolved.is_file():
         raise InputAudioError(ErrorCode.INVALID_AUDIO, "source file does not exist")
 
