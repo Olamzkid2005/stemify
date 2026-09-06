@@ -36,8 +36,9 @@ export class FakeStorage implements StorageAdapter {
   }): Promise<PresignedUpload> {
     this.validUploadTokens.add(input.uploadId);
     const objectKey = sourceObjectKey(input.uploadId, input.filename);
+    // Relative URL to the dev-only storage route; a real browser can reach it.
     return {
-      uploadUrl: `http://fake-storage.local/put/${encodeURIComponent(objectKey)}?token=${input.uploadId}`,
+      uploadUrl: `/api/dev-storage/${objectKey}?token=${input.uploadId}`,
       objectKey,
       expiresInSeconds: input.expiresIn,
     };
