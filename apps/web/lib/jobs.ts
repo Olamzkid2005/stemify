@@ -1,43 +1,49 @@
 /**
- * Job creation service (plan Task 6 / §11.2).
+ * Local SQLite job creation service.
  *
- * Validates policy server-side, verifies the uploaded object exists and
- * belongs to the caller's upload session, and creates the job row exactly
- * once per (owner, idempotency key).
+ * Validates policy, verifies the uploaded object exists, and creates exactly one
+ * queued job for an owner/idempotency-key pair. The worker claims this row later.
  */
-import { createHmac } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { createHmac, randomUUID } from "node:crypto";
 
 import { db } from "@/lib/db/client";
-import { jobs } from "@/lib/db/schema";
+import { type JobRow, type JobStatus, type SeparationMode, type OutputFormat } from "@/lib/db/schema";
 import { getStorage } from "@/lib/storage";
 import { CLIENT_LIMITS } from "@/lib/limits";
 
 export const SEPARATION_MODES = ["vocals_instrumental", "full_stems"] as const;
 export const OUTPUT_FORMATS = ["mp3", "wav", "flac", "ogg", "m4a"] as const;
 
+type CreateJobSuccess = { ok: true; status: 201 | 200; job: { id: string; status: JobStatus } };
+type CreateJobFailure = {
+  ok: false;
+  status: 400 | 403 | 409 | 413;
+  error: string;
+};
+
 export type CreateJobInput = {
   ownerKey: string;
   body: unknown;
 };
 
-export type CreateJobResult =
-  | { ok: true; status: 201 | 200; job: { id: string; status: string } }
-  | { ok: false; status: 400 | 403 | 409 | 413; error: string };
+export type CreateJobResult = CreateJobSuccess | CreateJobFailure;
 
 function idempotencyHash(ownerKey: string, key: string): string {
-  return createHmac("sha256", process.env.JOB_ACCESS_TOKEN_SECRET ?? "")
-    .update(`${ownerKey}:${key}`)
-    .digest("hex");
+  const secret = process.env.JOB_ACCESS_TOKEN_SECRET;
+  if (!secret) throw new Error("JOB_ACCESS_TOKEN_SECRET is not set");
+  return createHmac("sha256", secret).update(`${ownerKey}:${key}`).digest("hex");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function createJob(input: CreateJobInput): Promise<CreateJobResult> {
-  const body = input.body as Record<string, unknown> | null;
-  if (!body || typeof body !== "object") {
+  if (!isRecord(input.body)) {
     return { ok: false, status: 400, error: "invalid_request" };
   }
 
-  const { source, mode, outputFormat, idempotencyKey } = body as Record<string, unknown>;
+  const { source, mode, outputFormat, idempotencyKey } = input.body;
   if (
     !(SEPARATION_MODES as readonly unknown[]).includes(mode) ||
     !(OUTPUT_FORMATS as readonly unknown[]).includes(outputFormat) ||
@@ -48,44 +54,42 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
     return { ok: false, status: 400, error: "invalid_request" };
   }
 
-  const sourceObj = source as Record<string, unknown> | undefined;
-  if (!sourceObj || typeof sourceObj !== "object") {
+  if (!isRecord(source)) {
     return { ok: false, status: 400, error: "invalid_request" };
   }
 
   let sourceFilename: string | null = null;
   let sourceObjectKey: string | null = null;
 
-  if (sourceObj.type === "youtube") {
-    // Worker-side validation happens later; policy lives in §10.2. The URL is
-    // stored minimized; strict hostname checks land with Task 16.
-    const url = sourceObj.url;
-    if (typeof url !== "string" || !/^https:\/\/(www\.)?(youtube\.com|youtu\.be)\//.test(url)) {
+  if (source.type === "youtube") {
+    const url = source.url;
+    if (typeof url !== "string" || !isAllowedYouTubeUrl(url)) {
       return { ok: false, status: 400, error: "unsupported_source" };
     }
-  } else if (sourceObj.type === "upload") {
-    const { uploadId, objectKey, filename } = sourceObj as Record<string, unknown>;
+  } else if (source.type === "upload") {
+    const { uploadId, objectKey, filename } = source;
     if (
       typeof uploadId !== "string" ||
       typeof objectKey !== "string" ||
       typeof filename !== "string" ||
-      !/^upl_[a-f0-9]{32}$/.test(uploadId)
+      !/^upl_[a-f0-9]{32}$/.test(uploadId) ||
+      filename.length === 0 ||
+      filename.length > 255
     ) {
       return { ok: false, status: 400, error: "invalid_request" };
     }
-    // Ownership: the object key must live inside THIS upload session's prefix.
+
     const expectedPrefix = `sources/${uploadId}/`;
     if (!objectKey.startsWith(expectedPrefix)) {
       return { ok: false, status: 403, error: "object_forbidden" };
     }
-    const storage = getStorage();
-    const info = await storage.headObject(objectKey);
-    if (!info.exists) {
-      return { ok: false, status: 409, error: "object_missing" };
-    }
+
+    const info = await getStorage().headObject(objectKey);
+    if (!info.exists) return { ok: false, status: 409, error: "object_missing" };
     if (info.sizeBytes !== null && info.sizeBytes > CLIENT_LIMITS.maxUploadBytes) {
       return { ok: false, status: 413, error: "file_too_large" };
     }
+
     sourceFilename = filename.slice(0, 255);
     sourceObjectKey = objectKey;
   } else {
@@ -93,33 +97,56 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
   }
 
   const keyHash = idempotencyHash(input.ownerKey, idempotencyKey);
+  const existing = db.get<Pick<JobRow, "id" | "status">>(
+    "SELECT id, status FROM jobs WHERE owner_key = ? AND idempotency_key_hash = ? LIMIT 1",
+    input.ownerKey,
+    keyHash,
+  );
+  if (existing) return { ok: true, status: 200, job: existing };
 
-  // Idempotent creation: return the existing job for a repeated key.
-  const [existing] = await db
-    .select({ id: jobs.id, status: jobs.status })
-    .from(jobs)
-    .where(and(eq(jobs.ownerKey, input.ownerKey), eq(jobs.idempotencyKeyHash, keyHash)))
-    .limit(1);
-  if (existing) {
-    return { ok: true, status: 200, job: existing };
+  const jobId = `job_${randomUUID().replaceAll("-", "")}`;
+  db.run(
+    `INSERT OR IGNORE INTO jobs (
+      id, owner_key, source_type, source_filename, source_object_key, source_url,
+      mode, output_format, status, idempotency_key_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+    jobId,
+    input.ownerKey,
+    source.type === "youtube" ? "youtube" : "upload",
+    sourceFilename,
+    sourceObjectKey,
+    source.type === "youtube" ? source.url : null,
+    mode as SeparationMode,
+    outputFormat as OutputFormat,
+    keyHash,
+  );
+
+  const created = db.get<Pick<JobRow, "id" | "status">>(
+    "SELECT id, status FROM jobs WHERE owner_key = ? AND idempotency_key_hash = ? LIMIT 1",
+    input.ownerKey,
+    keyHash,
+  );
+  if (!created) throw new Error("job insert did not produce a row");
+
+  return {
+    ok: true,
+    status: created.id === jobId ? 201 : 200,
+    job: created,
+  };
+}
+
+function isAllowedYouTubeUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      (url.hostname === "youtube.com" ||
+        url.hostname === "www.youtube.com" ||
+        url.hostname === "youtu.be") &&
+      url.pathname.length > 1 &&
+      value.length <= 2048
+    );
+  } catch {
+    return false;
   }
-
-  const jobId = `job_${crypto.randomUUID().replaceAll("-", "")}`;
-  const [created] = await db
-    .insert(jobs)
-    .values({
-      id: jobId,
-      ownerKey: input.ownerKey,
-      sourceType: sourceObj.type === "youtube" ? "youtube" : "upload",
-      sourceFilename,
-      sourceObjectKey,
-      sourceUrl: sourceObj.type === "youtube" ? (sourceObj.url as string) : null,
-      mode: mode as (typeof SEPARATION_MODES)[number],
-      outputFormat: outputFormat as (typeof OUTPUT_FORMATS)[number],
-      status: "queued",
-      idempotencyKeyHash: keyHash,
-    })
-    .returning({ id: jobs.id, status: jobs.status });
-
-  return { ok: true, status: 201, job: created };
 }

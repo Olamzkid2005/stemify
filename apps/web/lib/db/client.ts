@@ -1,36 +1,83 @@
 /**
- * App-side database client (plan Section 6.1/6.3).
+ * Local SQLite database client.
  *
- * Uses the postgres-js driver over Supabase's transaction pooler.
- * `prepare: false` is required: PgBouncer in transaction mode does not
- * support prepared statements. The client is cached on globalThis in
- * development so Next.js hot reloads do not exhaust connection slots.
+ * The web process and the Python worker share this file. Initialization is lazy
+ * at module load, requires no external service, and configures SQLite for the
+ * short concurrent transactions used by the local job queue.
  */
-import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
-import * as schema from "./schema";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+
+import { SQLITE_SCHEMA } from "./schema";
 
 const globalForDb = globalThis as unknown as {
-  postgresClient?: postgres.Sql;
+  stemifyDatabase?: LocalDatabase;
 };
 
-function createClient(): postgres.Sql {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString || connectionString.includes("[YOUR-PASSWORD]")) {
-    throw new Error(
-      "DATABASE_URL is missing or incomplete. Set it in .env (transaction pooler URL).",
-    );
-  }
-  return postgres(connectionString, { prepare: false, max: 10 });
+function dataDirectory(): string {
+  return path.resolve(process.env.STEMIFY_DATA_DIR ?? path.join(process.cwd(), "data"));
 }
 
-export const sql: postgres.Sql =
-  globalForDb.postgresClient ?? createClient();
+export class LocalDatabase {
+  readonly dataDir: string;
+  readonly databasePath: string;
+  private readonly connection: DatabaseSync;
+
+  constructor(directory = dataDirectory()) {
+    this.dataDir = directory;
+    this.databasePath = path.join(directory, "stemify.sqlite3");
+    mkdirSync(directory, { recursive: true });
+    this.connection = new DatabaseSync(this.databasePath);
+    this.connection.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+    this.connection.exec(SQLITE_SCHEMA);
+  }
+
+  exec(sql: string): void {
+    this.connection.exec(sql);
+  }
+
+  run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number } {
+    const result = this.connection.prepare(sql).run(...params);
+    return {
+      changes: Number(result.changes),
+      lastInsertRowid: Number(result.lastInsertRowid),
+    };
+  }
+
+  get<T extends Record<string, unknown>>(sql: string, ...params: unknown[]): T | undefined {
+    return this.connection.prepare(sql).get<T>(...params);
+  }
+
+  all<T extends Record<string, unknown>>(sql: string, ...params: unknown[]): T[] {
+    return this.connection.prepare(sql).all<T>(...params);
+  }
+
+  transaction<T>(callback: () => T): T {
+    this.connection.exec("BEGIN IMMEDIATE");
+    try {
+      const result = callback();
+      this.connection.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.connection.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  close(): void {
+    this.connection.close();
+  }
+}
+
+export const db = globalForDb.stemifyDatabase ?? new LocalDatabase();
 
 if (process.env.NODE_ENV !== "production") {
-  globalForDb.postgresClient = sql;
+  globalForDb.stemifyDatabase = db;
 }
 
-export const db = drizzle(sql, { schema });
-
-export type Db = typeof db;
+/** Close the shared connection in scripts/tests that own the process lifetime. */
+export function closeDatabase(): void {
+  db.close();
+  if (globalForDb.stemifyDatabase === db) delete globalForDb.stemifyDatabase;
+}

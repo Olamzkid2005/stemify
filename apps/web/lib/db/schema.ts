@@ -1,127 +1,118 @@
 /**
- * Database schema — Stemify job metadata (plan Section 12).
+ * Local SQLite row types and schema names.
  *
- * The database stores metadata and state, never audio bytes. Column values for
- * status/stage/mode/format/error codes mirror packages/contracts/schemas.
+ * SQLite is the shared local queue database used by the Next.js process and the
+ * Python worker. Audio bytes remain in the filesystem; this module only models
+ * metadata and state.
  */
-import { relations, isNotNull } from "drizzle-orm";
-import {
-  bigint,
-  doublePrecision,
-  index,
-  integer,
-  pgTable,
-  text,
-  timestamp,
-  uniqueIndex,
-  uuid,
-} from "drizzle-orm/pg-core";
 
-export const jobs = pgTable(
-  "jobs",
-  {
-    id: text("id").primaryKey(), // public app_job_id, "job_..."
-    accessTokenHash: text("access_token_hash"),
-    ownerKey: text("owner_key"), // guest cookie id now; account id later
-    sourceType: text("source_type").$type<"upload" | "youtube">().notNull(),
-    sourceFilename: text("source_filename"),
-    sourceObjectKey: text("source_object_key"),
-    sourceUrl: text("source_url"),
-    sourceDurationSeconds: doublePrecision("source_duration_seconds"),
-    sourceSizeBytes: bigint("source_size_bytes", { mode: "number" }),
-    sourceSha256: text("source_sha256"),
-    mode: text("mode").$type<"vocals_instrumental" | "full_stems">().notNull(),
-    outputFormat: text("output_format")
-      .$type<"mp3" | "wav" | "flac" | "ogg" | "m4a">()
-      .notNull(),
-    status: text("status")
-      .$type<
-        | "queued"
-        | "processing"
-        | "completed"
-        | "failed"
-        | "canceled"
-        | "expired"
-      >()
-      .notNull()
-      .default("queued"),
-    stage: text("stage"),
-    progress: integer("progress").notNull().default(0),
-    workerCallId: text("worker_call_id"), // internal, never exposed
-    idempotencyKeyHash: text("idempotency_key_hash"),
-    errorCode: text("error_code"),
-    errorMessagePublic: text("error_message_public"),
-    diagnosticReference: text("diagnostic_reference"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    startedAt: timestamp("started_at", { withTimezone: true }),
-    completedAt: timestamp("completed_at", { withTimezone: true }),
-    expiresAt: timestamp("expires_at", { withTimezone: true }),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    index("jobs_status_created_idx").on(table.status, table.createdAt),
-    index("jobs_expires_at_idx").on(table.expiresAt),
-    index("jobs_worker_call_id_idx").on(table.workerCallId),
-    uniqueIndex("jobs_owner_idempotency_idx")
-      .on(table.ownerKey, table.idempotencyKeyHash)
-      .where(isNotNull(table.idempotencyKeyHash)),
-  ],
-).enableRLS();
+export type JobStatus = "queued" | "processing" | "completed" | "failed" | "canceled" | "expired";
+export type SourceType = "upload" | "youtube";
+export type SeparationMode = "vocals_instrumental" | "full_stems";
+export type OutputFormat = "mp3" | "wav" | "flac" | "ogg" | "m4a";
 
-export const jobOutputs = pgTable(
-  "job_outputs",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    jobId: text("job_id")
-      .notNull()
-      .references(() => jobs.id, { onDelete: "cascade" }),
-    stemKey: text("stem_key").notNull(), // vocals | instrumental | drums | bass | other
-    label: text("label").notNull(),
-    objectKey: text("object_key").notNull(),
-    mimeType: text("mime_type").notNull(),
-    sizeBytes: bigint("size_bytes", { mode: "number" }),
-    durationSeconds: doublePrecision("duration_seconds"),
-    sha256: text("sha256"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    expiresAt: timestamp("expires_at", { withTimezone: true }),
-  },
-  (table) => [index("job_outputs_job_id_idx").on(table.jobId)],
-).enableRLS();
+export type JobRow = {
+  id: string;
+  access_token_hash: string | null;
+  owner_key: string;
+  source_type: SourceType;
+  source_filename: string | null;
+  source_object_key: string | null;
+  source_path: string | null;
+  source_url: string | null;
+  source_duration_seconds: number | null;
+  source_size_bytes: number | null;
+  source_sha256: string | null;
+  mode: SeparationMode;
+  output_format: OutputFormat;
+  status: JobStatus;
+  stage: string | null;
+  progress: number;
+  cancel_requested: number;
+  worker_call_id: string | null;
+  idempotency_key_hash: string | null;
+  error_code: string | null;
+  error_message_public: string | null;
+  diagnostic_reference: string | null;
+  created_at: number;
+  started_at: number | null;
+  completed_at: number | null;
+  expires_at: number | null;
+  updated_at: number;
+};
 
-export const workerEvents = pgTable("worker_events", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  eventId: text("event_id").notNull().unique(), // idempotency for callbacks
-  jobId: text("job_id")
-    .notNull()
-    .references(() => jobs.id, { onDelete: "cascade" }),
-  eventType: text("event_type").notNull(),
-  payloadHash: text("payload_hash"),
-  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [index("worker_events_job_id_idx").on(table.jobId)]).enableRLS();
+export type JobOutputRow = {
+  id: string;
+  job_id: string;
+  stem_key: string;
+  label: string;
+  relative_path: string;
+  mime_type: string;
+  size_bytes: number | null;
+  duration_seconds: number | null;
+  sha256: string | null;
+  created_at: number;
+  expires_at: number | null;
+};
 
-export const usageEvents = pgTable(
-  "usage_events",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    jobId: text("job_id").references(() => jobs.id, { onDelete: "set null" }),
-    actorKeyHash: text("actor_key_hash"), // hashed IP/session, never raw IPs
-    eventType: text("event_type").notNull(),
-    mode: text("mode"),
-    durationSeconds: doublePrecision("duration_seconds"),
-    gpuSeconds: doublePrecision("gpu_seconds"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    index("usage_events_actor_idx").on(table.actorKeyHash, table.createdAt),
-    index("usage_events_job_id_idx").on(table.jobId),
-  ],
-).enableRLS();
+export const SQLITE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS jobs (
+  id TEXT PRIMARY KEY,
+  access_token_hash TEXT,
+  owner_key TEXT NOT NULL,
+  source_type TEXT NOT NULL CHECK (source_type IN ('upload', 'youtube')),
+  source_filename TEXT,
+  source_object_key TEXT,
+  source_path TEXT,
+  source_url TEXT,
+  source_duration_seconds REAL,
+  source_size_bytes INTEGER,
+  source_sha256 TEXT,
+  mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems')),
+  output_format TEXT NOT NULL CHECK (output_format IN ('mp3', 'wav', 'flac', 'ogg', 'm4a')),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'canceled', 'expired')),
+  stage TEXT,
+  progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+  cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0, 1)),
+  worker_call_id TEXT,
+  idempotency_key_hash TEXT,
+  error_code TEXT,
+  error_message_public TEXT,
+  diagnostic_reference TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+  started_at INTEGER,
+  completed_at INTEGER,
+  expires_at INTEGER,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+  UNIQUE (owner_key, idempotency_key_hash)
+);
 
-export const jobsRelations = relations(jobs, ({ many }) => ({
-  outputs: many(jobOutputs),
-  events: many(workerEvents),
-}));
+CREATE TABLE IF NOT EXISTS job_outputs (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  stem_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  relative_path TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size_bytes INTEGER,
+  duration_seconds REAL,
+  sha256 TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+  expires_at INTEGER
+);
 
-export const jobOutputsRelations = relations(jobOutputs, ({ one }) => ({
-  job: one(jobs, { fields: [jobOutputs.jobId], references: [jobs.id] }),
-}));
+CREATE TABLE IF NOT EXISTS job_events (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,
+  stage TEXT,
+  progress INTEGER CHECK (progress BETWEEN 0 AND 100),
+  detail TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000)
+);
+
+CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS jobs_expires_at_idx ON jobs(expires_at);
+CREATE INDEX IF NOT EXISTS job_outputs_job_id_idx ON job_outputs(job_id);
+CREATE INDEX IF NOT EXISTS job_events_job_id_idx ON job_events(job_id);
+`;

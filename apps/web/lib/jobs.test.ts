@@ -2,18 +2,15 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 
 /**
- * Job creation integration tests (Task 6 acceptance criteria).
- * Requires DATABASE_URL; uses the in-memory fake storage automatically
- * (no STORAGE_* env vars in tests).
+ * Job creation integration tests for the local SQLite queue.
+ * Uses the in-memory fake storage adapter and the local database file.
  */
-import { eq } from "drizzle-orm";
+import { db, closeDatabase } from "@/lib/db/client";
+import { FakeStorage } from "@/lib/storage/fake";
+import { __setStorageForTests } from "@/lib/storage";
+import { createJob } from "@/lib/jobs";
 
 process.env.JOB_ACCESS_TOKEN_SECRET ??= "test-secret-for-local-tests-only";
-
-import { db, sql } from "@/lib/db/client";
-import { jobs } from "@/lib/db/schema";
-import { FakeStorage } from "@/lib/storage/fake";
-import { createJob } from "@/lib/jobs";
 
 const OWNER = "gid_testowner0000000001";
 const UPLOAD_ID = `upl_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -27,17 +24,15 @@ const validBody: Record<string, unknown> = {
 };
 
 describe("createJob", () => {
-  before(async () => {
+  before(() => {
     const storage = new FakeStorage();
-    // Inject as the process-wide adapter for the duration of the test.
-    const { __setStorageForTests } = await import("@/lib/storage/index");
     __setStorageForTests(storage);
     storage.put(OBJECT_KEY, Buffer.alloc(2048));
   });
 
-  after(async () => {
-    await db.delete(jobs).where(eq(jobs.ownerKey, OWNER));
-    await sql.end();
+  after(() => {
+    db.run("DELETE FROM jobs WHERE owner_key = ?", OWNER);
+    closeDatabase();
   });
 
   it("creates a queued job for a valid uploaded object", async () => {
@@ -78,7 +73,8 @@ describe("createJob", () => {
   });
 
   it("rejects uploads whose object never arrived", async () => {
-    const missing = structuredClone(validBody) as Record<string, Record<string, unknown>> & {
+    const missing = structuredClone(validBody) as {
+      source: Record<string, unknown>;
       idempotencyKey: string;
     };
     missing.idempotencyKey = "client-key-ffffffffffffffff";
