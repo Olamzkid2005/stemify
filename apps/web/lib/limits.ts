@@ -2,6 +2,9 @@
  * Client-safe product limits (plan Section 9). Server-side validation in the
  * API routes is authoritative; these exist for fast client feedback only.
  */
+export const SEPARATION_MODES = ["vocals_instrumental", "full_stems"] as const;
+export const OUTPUT_FORMATS = ["mp3", "wav", "flac", "ogg", "m4a"] as const;
+
 export const CLIENT_LIMITS = {
   maxUploadBytes: 100 * 1024 * 1024, // 100 MB
   maxDurationSeconds: 480, // 8 minutes

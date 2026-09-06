@@ -7,12 +7,11 @@
 import { createHmac, randomUUID } from "node:crypto";
 
 import { db } from "@/lib/db/client";
-import { type JobRow, type JobStatus, type SeparationMode, type OutputFormat } from "@/lib/db/schema";
+import { type JobRow, type JobStatus, type SeparationMode, type OutputFormat, type UploadRow } from "@/lib/db/schema";
 import { getStorage } from "@/lib/storage";
-import { CLIENT_LIMITS } from "@/lib/limits";
+import { CLIENT_LIMITS, OUTPUT_FORMATS, SEPARATION_MODES } from "@/lib/limits";
 
-export const SEPARATION_MODES = ["vocals_instrumental", "full_stems"] as const;
-export const OUTPUT_FORMATS = ["mp3", "wav", "flac", "ogg", "m4a"] as const;
+export { OUTPUT_FORMATS, SEPARATION_MODES };
 
 type CreateJobSuccess = { ok: true; status: 201 | 200; job: { id: string; status: JobStatus } };
 type CreateJobFailure = {
@@ -67,31 +66,29 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
       return { ok: false, status: 400, error: "unsupported_source" };
     }
   } else if (source.type === "upload") {
-    const { uploadId, objectKey, filename } = source;
-    if (
-      typeof uploadId !== "string" ||
-      typeof objectKey !== "string" ||
-      typeof filename !== "string" ||
-      !/^upl_[a-f0-9]{32}$/.test(uploadId) ||
-      filename.length === 0 ||
-      filename.length > 255
-    ) {
+    const { uploadId } = source;
+    if (typeof uploadId !== "string" || !/^upl_[a-f0-9]{32}$/.test(uploadId)) {
       return { ok: false, status: 400, error: "invalid_request" };
     }
 
-    const expectedPrefix = `sources/${uploadId}/`;
-    if (!objectKey.startsWith(expectedPrefix)) {
-      return { ok: false, status: 403, error: "object_forbidden" };
+    const upload = db.get<UploadRow>(
+      "SELECT * FROM uploads WHERE id = ? AND owner_key = ? LIMIT 1",
+      uploadId,
+      input.ownerKey,
+    );
+    if (!upload) return { ok: false, status: 403, error: "upload_forbidden" };
+    if (upload.expires_at !== null && upload.expires_at < Date.now()) {
+      return { ok: false, status: 409, error: "upload_expired" };
     }
 
-    const info = await getStorage().headObject(objectKey);
+    const info = await getStorage().headObject(upload.object_key);
     if (!info.exists) return { ok: false, status: 409, error: "object_missing" };
     if (info.sizeBytes !== null && info.sizeBytes > CLIENT_LIMITS.maxUploadBytes) {
       return { ok: false, status: 413, error: "file_too_large" };
     }
 
-    sourceFilename = filename.slice(0, 255);
-    sourceObjectKey = objectKey;
+    sourceFilename = upload.filename;
+    sourceObjectKey = upload.object_key;
   } else {
     return { ok: false, status: 400, error: "unsupported_source" };
   }

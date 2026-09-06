@@ -28,10 +28,21 @@ describe("createJob", () => {
     const storage = new FakeStorage();
     __setStorageForTests(storage);
     storage.put(OBJECT_KEY, Buffer.alloc(2048));
+    db.run(
+      `INSERT OR REPLACE INTO uploads (id, owner_key, filename, object_key, size_bytes, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      UPLOAD_ID,
+      OWNER,
+      "song.mp3",
+      OBJECT_KEY,
+      2048,
+      Date.now() + 60_000,
+    );
   });
 
   after(() => {
     db.run("DELETE FROM jobs WHERE owner_key = ?", OWNER);
+    db.run("DELETE FROM uploads WHERE owner_key = ?", OWNER);
     closeDatabase();
   });
 
@@ -64,9 +75,9 @@ describe("createJob", () => {
     if (!result.ok) assert.equal(result.status, 400);
   });
 
-  it("rejects object keys outside the caller's upload session", async () => {
+  it("rejects uploads outside the caller's session", async () => {
     const evil = structuredClone(validBody) as { source: Record<string, unknown> };
-    evil.source.objectKey = "sources/upl_ffffffffffffffffffffffffffffffff/other.mp3";
+    evil.source.uploadId = "upl_ffffffffffffffffffffffffffffffff";
     const result = await createJob({ ownerKey: OWNER, body: evil });
     assert.equal(result.ok, false);
     if (!result.ok) assert.equal(result.status, 403);
@@ -82,7 +93,7 @@ describe("createJob", () => {
     missing.source.objectKey = `sources/${missing.source.uploadId}/song.mp3`;
     const result = await createJob({ ownerKey: OWNER, body: missing });
     assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.status, 409);
+    if (!result.ok) assert.equal(result.status, 403);
   });
 
   it("rejects YouTube URLs outside the allowlisted hosts", async () => {

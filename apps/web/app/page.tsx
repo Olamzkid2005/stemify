@@ -54,31 +54,6 @@ export default function Home() {
         {/* Input Mode Switcher + Upload/YouTube flows */}
         <SourcePicker />
 
-        {/* Separation Mode Settings */}
-        <div className="mt-8 flex flex-col items-center">
-          <span className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase mb-3">
-            Separation Mode
-          </span>
-          {/* Mode Toggle Container */}
-          <div className="bg-[#121215] border border-zinc-800/90 p-1 rounded-xl flex items-center gap-1">
-            {/* 2-stem Mode Option (Inactive) */}
-            <button
-              className="px-3.5 py-1.5 rounded-lg text-xs text-zinc-400 hover:text-zinc-300 font-medium transition"
-              type="button"
-            >
-              Vocals &amp; Instrumental{" "}
-              <span className="text-zinc-600 font-normal">(2-stem)</span>
-            </button>
-            {/* 4-stem Mode Option (Active) */}
-            <button
-              className="px-3.5 py-1.5 rounded-lg text-xs bg-[#1f1f26] border border-zinc-700/60 text-zinc-100 font-semibold transition"
-              type="button"
-            >
-              Full Split <span className="text-zinc-400 font-normal">(4-stem)</span>
-            </button>
-          </div>
-        </div>
-
         {/* Feature Badges */}
         <div className="mt-10 flex flex-wrap items-center justify-center gap-6 md:gap-8 text-zinc-500 text-[11px] font-semibold tracking-wider">
           {/* Feature 1: Fast Processing */}

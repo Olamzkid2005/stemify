@@ -54,7 +54,7 @@ describe("FakeStorage", () => {
       expiresIn: 900,
     });
     assert.equal(presigned.objectKey, sourceObjectKey(uploadId, "song.mp3"));
-    assert.ok(presigned.uploadUrl.includes(encodeURIComponent(presigned.objectKey)));
+    assert.equal(presigned.uploadUrl, "/api/dev-storage/sources/upl_abc1234567890123/song.mp3?token=upl_abc1234567890123");
 
     // Simulate the browser PUTting bytes.
     storage.put(presigned.objectKey, Buffer.alloc(1024));

@@ -41,6 +41,16 @@ export type JobRow = {
   updated_at: number;
 };
 
+export type UploadRow = {
+  id: string;
+  owner_key: string;
+  filename: string;
+  object_key: string;
+  size_bytes: number;
+  created_at: number;
+  expires_at: number | null;
+};
+
 export type JobOutputRow = {
   id: string;
   job_id: string;
@@ -56,6 +66,18 @@ export type JobOutputRow = {
 };
 
 export const SQLITE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS uploads (
+  id TEXT PRIMARY KEY,
+  owner_key TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  object_key TEXT NOT NULL UNIQUE,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+  created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+  expires_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS uploads_owner_created_idx ON uploads(owner_key, created_at);
+
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   access_token_hash TEXT,

@@ -6,6 +6,10 @@ __pycache__/
 *.pyc
 .venv*/
 
+# Local runtime data
+data/
+apps/web/data/
+
 # Builds
 .next/
 dist/
