@@ -10,7 +10,7 @@ from enum import StrEnum
 
 
 class Stage(StrEnum):
-    QUEUED = "queued"
+    STARTING = "starting"
     DOWNLOADING = "downloading"
     VALIDATING = "validating"
     PREPARING_AUDIO = "preparing_audio"

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemify.app/schemas/job-status.schema.json",
+  "title": "Job status response (GET /api/jobs/{jobId})",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "jobId",
+    "status",
+    "stage",
+    "progress",
+    "mode",
+    "outputFormat",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "jobId": { "type": "string", "pattern": "^job_[A-Za-z0-9]{16,64}$" },
+    "status": { "$ref": "common.schema.json#/$defs/jobStatus" },
+    "stage": { "$ref": "common.schema.json#/$defs/jobStage" },
+    "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename"],
+      "properties": {
+        "filename": { "type": "string", "minLength": 1, "maxLength": 255 }
+      }
+    },
+    "mode": { "$ref": "common.schema.json#/$defs/separationMode" },
+    "outputFormat": { "$ref": "common.schema.json#/$defs/outputFormat" },
+    "stems": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/stemDescriptor" },
+      "minItems": 1,
+      "maxItems": 4
+    },
+    "downloadUrl": { "type": "string", "pattern": "^/api/jobs/job_[A-Za-z0-9]{16,64}/downloads" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "errorCode": { "$ref": "common.schema.json#/$defs/publicErrorCode" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "completed" } }, "required": ["status"] },
+      "then": {
+        "required": ["stems", "downloadUrl", "expiresAt"]
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "failed" } }, "required": ["status"] },
+      "then": {
+        "required": ["errorCode"]
+      }
+    }
+  ]
+}

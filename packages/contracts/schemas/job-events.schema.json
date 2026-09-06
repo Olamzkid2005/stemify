@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemify.app/schemas/job-events.schema.json",
+  "title": "Worker event (POST /api/internal/worker-events)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["jobId", "eventId", "status", "stage", "progress"],
+  "properties": {
+    "jobId": { "type": "string", "pattern": "^job_[A-Za-z0-9]{16,64}$" },
+    "eventId": { "type": "string", "pattern": "^evt_[A-Za-z0-9]{16,64}$" },
+    "workerCallId": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "status": { "$ref": "common.schema.json#/$defs/jobStatus" },
+    "stage": { "$ref": "common.schema.json#/$defs/jobStage" },
+    "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stemKey", "label", "objectKey", "mimeType", "sizeBytes", "durationSeconds", "sha256"],
+        "properties": {
+          "stemKey": { "$ref": "common.schema.json#/$defs/stemKey" },
+          "label": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "objectKey": { "type": "string", "pattern": "^results/job_[A-Za-z0-9]{16,64}/[A-Za-z0-9._-]{1,128}$" },
+          "mimeType": {
+            "enum": [
+              "audio/mpeg",
+              "audio/wav",
+              "audio/flac",
+              "audio/ogg",
+              "audio/mp4"
+            ]
+          },
+          "sizeBytes": { "type": "integer", "minimum": 1, "maximum": 2147483648 },
+          "durationSeconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 3600 },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      },
+      "maxItems": 5
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code"],
+      "properties": {
+        "code": { "$ref": "common.schema.json#/$defs/publicErrorCode" },
+        "message": { "type": "string", "maxLength": 512 },
+        "diagnosticReference": { "type": "string", "minLength": 8, "maxLength": 64 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "completed" } }, "required": ["status"] },
+      "then": {
+        "required": ["outputs"],
+        "properties": {
+          "error": { "maxProperties": 0 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "failed" } }, "required": ["status"] },
+      "then": {
+        "required": ["error"]
+      }
+    }
+  ]
+}

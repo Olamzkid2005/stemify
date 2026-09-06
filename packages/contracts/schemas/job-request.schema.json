@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemify.app/schemas/job-request.schema.json",
+  "title": "Job creation request (POST /api/jobs)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "mode", "outputFormat", "idempotencyKey"],
+  "properties": {
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "uploadId", "objectKey", "filename"],
+          "properties": {
+            "type": { "const": "upload" },
+            "uploadId": { "type": "string", "pattern": "^upl_[A-Za-z0-9]{16,64}$" },
+            "objectKey": { "type": "string", "pattern": "^sources/upl_[A-Za-z0-9]{16,64}/[A-Za-z0-9._-]{1,128}$" },
+            "filename": { "type": "string", "minLength": 1, "maxLength": 255 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "url"],
+          "properties": {
+            "type": { "const": "youtube" },
+            "url": {
+              "type": "string",
+              "pattern": "^https://(www\\.)?(youtube\\.com|youtu\\.be)/\\S{1,2000}$",
+              "maxLength": 2048
+            }
+          }
+        }
+      ]
+    },
+    "mode": { "$ref": "common.schema.json#/$defs/separationMode" },
+    "outputFormat": { "$ref": "common.schema.json#/$defs/outputFormat" },
+    "idempotencyKey": { "type": "string", "minLength": 16, "maxLength": 128 }
+  }
+}

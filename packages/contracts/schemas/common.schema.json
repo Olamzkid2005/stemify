@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemify.app/schemas/common.schema.json",
+  "title": "Shared enum definitions for Stemify contracts",
+  "$defs": {
+    "sourceType": {
+      "enum": ["upload", "youtube"]
+    },
+    "separationMode": {
+      "enum": ["vocals_instrumental", "full_stems"]
+    },
+    "outputFormat": {
+      "enum": ["mp3", "wav", "flac", "ogg", "m4a"]
+    },
+    "jobStatus": {
+      "enum": [
+        "queued",
+        "processing",
+        "completed",
+        "failed",
+        "canceled",
+        "expired"
+      ]
+    },
+    "jobStage": {
+      "enum": [
+        "starting",
+        "downloading",
+        "validating",
+        "preparing_audio",
+        "separating",
+        "encoding",
+        "uploading_results",
+        "cleanup",
+        "completed"
+      ]
+    },
+    "stemKey": {
+      "enum": ["vocals", "instrumental", "drums", "bass", "other"]
+    },
+    "publicErrorCode": {
+      "enum": [
+        "INVALID_AUDIO",
+        "LIMIT_EXCEEDED",
+        "DOWNLOAD_FAILED",
+        "MODEL_LOAD_FAILED",
+        "GPU_OUT_OF_MEMORY",
+        "INFERENCE_FAILED",
+        "OUTPUT_ENCODING_FAILED",
+        "OUTPUT_VALIDATION_FAILED",
+        "STORAGE_UPLOAD_FAILED",
+        "CANCELED",
+        "TIMEOUT",
+        "UNKNOWN"
+      ]
+    },
+    "stemDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/stemKey" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "durationSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 3600
+        }
+      }
+    }
+  }
+}

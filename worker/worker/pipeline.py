@@ -9,6 +9,7 @@ from __future__ import annotations
 from worker.stages import Stage
 
 PIPELINE_STAGES: tuple[Stage, ...] = (
+    Stage.STARTING,
     Stage.DOWNLOADING,
     Stage.VALIDATING,
     Stage.PREPARING_AUDIO,

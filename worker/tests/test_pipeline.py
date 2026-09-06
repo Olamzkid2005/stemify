@@ -7,6 +7,7 @@ from worker.stages import TERMINAL_STATUSES, Stage, Status
 
 def test_pipeline_stages_are_defined_in_order() -> None:
     assert PIPELINE_STAGES == (
+        Stage.STARTING,
         Stage.DOWNLOADING,
         Stage.VALIDATING,
         Stage.PREPARING_AUDIO,
