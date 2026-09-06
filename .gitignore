@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.venv*/
+
+# Builds
+.next/
+dist/
+build/
+out/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Modal / model artifacts
+*.ckpt
+*.th
+modal-volume/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test and coverage output
+coverage/
+.pytest_cache/
