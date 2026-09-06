@@ -208,7 +208,7 @@ The database stores metadata and state, not large audio files.
 
 ### 6.4 Object storage
 
-Use private object storage with S3-compatible access and presigned URLs. Cloudflare R2, S3, or another compatible provider can be selected during implementation.
+Use private object storage with S3-compatible access and presigned URLs. Cloudflare R2 is the selected provider (zero egress fees for stem downloads; AWS S3 also works through the same adapter).
 
 The storage abstraction must hide the provider from application code. It must support:
 
