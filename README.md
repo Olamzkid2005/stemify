@@ -7,7 +7,7 @@ One repository, independently deployable parts (product plan: `STEM_EXTRACTOR_PL
 
 - `apps/web` — Next.js (App Router) web application, deployed on Vercel.
 - `worker/` — Python audio-separation worker (Modal GPU deployment comes at Task 11).
-- `packages/contracts` — shared job/event schemas (added in Task 2).
+- `packages/contracts` — shared job/event schemas (JSON Schema, Task 2).
 
 ## Develop
 
@@ -29,6 +29,14 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m pytest
 ruff check .
+```
+
+Contracts:
+
+```bash
+cd packages/contracts
+pip install -r requirements.txt
+python -m pytest
 ```
 
 Working rules for agents and contributors: `AGENTS.md`.
