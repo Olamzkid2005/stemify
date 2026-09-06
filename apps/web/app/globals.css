@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+
+  --color-dark-950: #09090b;
+  --color-dark-900: #0e0e11;
+  --color-dark-850: #141418;
+  --color-dark-800: #1a1a21;
+  --color-dark-700: #27272f;
+  --color-dark-600: #3f3f46;
+
+  --color-accent-purple: #8b5cf6;
+  --color-accent-light-purple: #a78bfa;
+  --color-accent-bright-purple: #7c3aed;
+}
+
+body {
+  background-color: #0c0c0e;
+  color: #f4f4f5;
+}
+
+.purple-gradient-btn {
+  background: linear-gradient(135deg, #9061f9 0%, #7e3af2 100%);
+  box-shadow: 0 0 20px -2px rgba(144, 97, 249, 0.4);
+}
+
+.purple-gradient-btn:hover {
+  background: linear-gradient(135deg, #9f75ff 0%, #8c4bff 100%);
+  box-shadow: 0 0 25px 0px rgba(144, 97, 249, 0.55);
+}

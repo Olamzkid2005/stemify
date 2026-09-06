@@ -1,0 +1,12 @@
+[project]
+name = "stemify-worker"
+version = "0.1.0"
+description = "Stemify audio separation worker - validation, inference, encoding, packaging"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

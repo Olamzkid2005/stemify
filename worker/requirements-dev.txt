@@ -1,0 +1,4 @@
+# Development and test tooling. Runtime dependencies (model/GPU stack) are added
+# with the Modal image in Task 11 so local installs stay light.
+pytest==8.4.1
+ruff==0.12.7
