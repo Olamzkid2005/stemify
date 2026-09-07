@@ -17,6 +17,7 @@ from worker.input_audio import (
     JobTempDir,
     InputAudioError,
     _require_ffmpeg_tool,
+    decode_to_waveform,
     prepare_source,
     run_ffprobe,
     validate_source,
@@ -150,3 +151,22 @@ def test_source_outside_job_dir_is_rejected(tmp_path: Path) -> None:
         with pytest.raises(InputAudioError) as excinfo:
             prepare_source(src, job_dir)
     assert excinfo.value.code == ErrorCode.INVALID_AUDIO
+
+
+def test_decode_to_waveform_returns_canonical_stereo(tmp_path: Path) -> None:
+    """Main path for the Task 9 waveform handoff (skips without torchaudio)."""
+    torchaudio = pytest.importorskip("torchaudio")
+    src = tmp_path / "tone.mp3"
+    make_audio(src, 0.5)
+
+    with JobTempDir() as job_dir:
+        inside = job_dir / "tone.mp3"
+        shutil.copy(src, inside)
+        canonical, _ = prepare_source(inside, job_dir)
+        waveform, probe = decode_to_waveform(canonical)
+
+        assert waveform.dtype.name == "float32"
+        assert waveform.shape[0] == 2  # stereo
+        assert waveform.shape[1] > 0
+        assert probe.sample_rate == 44100
+        assert torchaudio is not None  # imported above; keeps the skip honest

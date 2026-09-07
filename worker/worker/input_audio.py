@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from worker.errors import ErrorCode
 
@@ -208,3 +209,43 @@ def prepare_source(source: Path, job_dir: Path) -> tuple[Path, ProbeResult]:
     dest = job_dir / "input.wav"
     decode_to_canonical_wav(resolved, dest)
     return dest, probe
+
+
+def decode_to_waveform(canonical_wav: Path) -> tuple[Any, ProbeResult]:
+    """Load a canonical WAV into a float32 (channels, samples) numpy array.
+
+    Re-probes so callers get the decoded properties (rate/channels/duration)
+    without trusting the original source probe. Shape is (channels, samples),
+    the layout demucs expects. Requires numpy (worker/requirements.txt).
+    """
+    try:
+        import numpy as np
+        import torchaudio
+    except ImportError as error:
+        raise InputAudioError(
+            ErrorCode.MODEL_LOAD_FAILED,
+            "numpy/torchaudio are required for separation; "
+            "run: pip install -r worker/requirements.txt",
+        ) from error
+
+    probe = run_ffprobe(canonical_wav)
+    if probe.sample_rate != CANONICAL_SAMPLE_RATE or probe.channels != CANONICAL_CHANNELS:
+        raise InputAudioError(
+            ErrorCode.INVALID_AUDIO,
+            f"canonical WAV must be {CANONICAL_SAMPLE_RATE} Hz stereo, "
+            f"got {probe.sample_rate} Hz / {probe.channels}ch",
+        )
+
+    try:
+        loaded, rate = torchaudio.load(str(canonical_wav), channels_first=True)
+    except Exception as error:
+        raise InputAudioError(ErrorCode.INVALID_AUDIO, f"could not read decoded WAV: {error}") from error
+    if rate != CANONICAL_SAMPLE_RATE:
+        raise InputAudioError(ErrorCode.INVALID_AUDIO, "unexpected sample rate in decoded WAV")
+
+    waveform = loaded.numpy().astype(np.float32, copy=False)
+    if not np.isfinite(waveform).all():
+        raise InputAudioError(ErrorCode.INVALID_AUDIO, "decoded audio contains NaN or infinity")
+    if waveform.shape[1] == 0:
+        raise InputAudioError(ErrorCode.INVALID_AUDIO, "decoded audio is empty")
+    return waveform, probe

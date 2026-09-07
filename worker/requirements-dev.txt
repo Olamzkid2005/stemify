@@ -1,4 +1,4 @@
-# Development and test tooling. Runtime dependencies (model/GPU stack) are added
-# with the Modal image in Task 11 so local installs stay light.
+# Development and test tooling. Separation-engine runtime dependencies live in
+# requirements.txt (plan Task 9) and stay optional for control-plane work.
 pytest==8.4.1
 ruff==0.12.7
