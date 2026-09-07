@@ -27,6 +27,20 @@ chmod +x ffmpeg ffprobe
 
 `worker/bin/` is gitignored — binaries are never committed.
 
+## Run the local worker
+
+The worker polls the shared SQLite queue (`$STEMIFY_DATA_DIR/stemify.sqlite3`, the
+same file the web app writes) and processes one job at a time:
+
+```bash
+python -m worker.job_loop          # long-running loop (Ctrl+C stops after the current job)
+```
+
+Configuration: `STEMIFY_DATA_DIR` (defaults to `./data`) and
+`STEMIFY_WORKER_POLL_MS` (default 500). Jobs left in `processing` by a crashed
+run are failed safely on the next startup. Until Demucs lands (Task 9), jobs
+that pass validation stop with `MODEL_LOAD_FAILED`.
+
 ## Verify
 
 ```bash
@@ -34,5 +48,5 @@ python -m pytest          # tests
 ruff check .              # lint
 ```
 
-The model/GPU stack (PyTorch, separation libraries, FFmpeg) is pinned in the Modal
-image at Task 11 — local development stays dependency-light until then.
+The model/GPU stack (PyTorch, separation libraries) arrives with Task 9 — local
+development stays dependency-light until then.
