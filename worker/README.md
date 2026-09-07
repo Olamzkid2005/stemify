@@ -86,3 +86,17 @@ The separation engine lives behind `worker/worker/models/`:
 tensors — it passes canonical stereo float32 waveforms in and receives named
 numpy stems out. In `vocals_instrumental` mode the instrumental stem is
 mixture minus vocals (fixed per-profile policy).
+
+## Encoding and packaging (Task 10)
+
+`worker/worker/encoding.py` turns validated float32 WAV masters into the
+selected output format (mp3 320k, wav PCM s16, flac, ogg Vorbis q8, m4a AAC
+256k) with FFmpeg argument arrays, then re-probes every encoded file with
+ffprobe before it may be published. `worker/worker/packaging.py` builds the
+schema-valid `manifest.json` (validated against
+`packages/contracts/schemas/output-manifest.schema.json` when jsonschema is
+installed) and a deterministic ZIP containing the stems plus the manifest.
+Partial artifacts are never published; failed writes leave no ZIP behind.
+
+Pipeline wiring (claim → separate → encode → package → outputs in SQLite)
+arrives with Task 11.

@@ -13,7 +13,7 @@ def test_pipeline_stages_are_defined_in_order() -> None:
         Stage.PREPARING_AUDIO,
         Stage.SEPARATING,
         Stage.ENCODING,
-        Stage.UPLOADING_RESULTS,
+        Stage.PACKAGING,
         Stage.CLEANUP,
     )
 

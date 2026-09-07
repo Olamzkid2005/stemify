@@ -1,6 +1,6 @@
-"""One job's pipeline orchestration: retrieve, validate, separate, encode, upload.
+"""One job's pipeline orchestration: retrieve, validate, separate, encode, package.
 
-Implementation arrives with Tasks 8-10 of the product plan. This module currently
+Implementation arrives with Tasks 8-11 of the product plan. This module currently
 exposes the pipeline stage order so callers and tests share one definition.
 """
 
@@ -15,6 +15,6 @@ PIPELINE_STAGES: tuple[Stage, ...] = (
     Stage.PREPARING_AUDIO,
     Stage.SEPARATING,
     Stage.ENCODING,
-    Stage.UPLOADING_RESULTS,
+    Stage.PACKAGING,
     Stage.CLEANUP,
 )

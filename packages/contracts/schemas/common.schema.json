@@ -30,7 +30,7 @@
         "preparing_audio",
         "separating",
         "encoding",
-        "uploading_results",
+        "packaging",
         "cleanup",
         "completed"
       ]

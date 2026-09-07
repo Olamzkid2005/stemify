@@ -1,6 +1,6 @@
 """Progress stage definitions shared by the worker pipeline.
 
-Stage order and the public progress mapping live in the product plan (Section 14).
+Stage order and the public progress mapping live in the product plan (Section 13).
 The downloading stage applies only to YouTube sources; upload jobs start at validating.
 """
 
@@ -16,7 +16,7 @@ class Stage(StrEnum):
     PREPARING_AUDIO = "preparing_audio"
     SEPARATING = "separating"
     ENCODING = "encoding"
-    UPLOADING_RESULTS = "uploading_results"
+    PACKAGING = "packaging"
     CLEANUP = "cleanup"
 
 
