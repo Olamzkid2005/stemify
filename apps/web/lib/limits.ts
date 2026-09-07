@@ -5,6 +5,9 @@
 export const SEPARATION_MODES = ["vocals_instrumental", "full_stems"] as const;
 export const OUTPUT_FORMATS = ["mp3", "wav", "flac", "ogg", "m4a"] as const;
 
+/** Stem keys shared with the contracts `stemKey` enum (archive is reserved for the ZIP). */
+export const STEM_KEYS = ["vocals", "instrumental", "drums", "bass", "other"] as const;
+
 export const CLIENT_LIMITS = {
   maxUploadBytes: 100 * 1024 * 1024, // 100 MB
   maxDurationSeconds: 480, // 8 minutes

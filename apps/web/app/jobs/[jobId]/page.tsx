@@ -104,22 +104,43 @@ export default function JobPage() {
         <p className="text-sm text-zinc-400">
           {job.source.filename} · {job.mode === "full_stems" ? "Full split" : "Vocals & instrumental"}
         </p>
+        <a
+          href={`${job.downloadUrl ?? `/api/jobs/${job.jobId}/downloads`}?kind=zip`}
+          className="purple-gradient-btn rounded-full px-6 py-2.5 text-sm font-semibold text-white"
+          download
+        >
+          Download all (ZIP)
+        </a>
         <ul className="w-full space-y-3 text-left">
           {(job.stems ?? []).map((stem) => (
             <li
               key={stem.id}
-              className="flex items-center justify-between rounded-xl border border-zinc-800 bg-[#131317] px-4 py-3"
+              className="rounded-xl border border-zinc-800 bg-[#131317] px-4 py-3"
             >
-              <div>
-                <p className="text-sm font-semibold text-zinc-100">{stem.label}</p>
-                <p className="text-xs text-zinc-500">
-                  {stem.durationSeconds !== null
-                    ? `${Math.floor(stem.durationSeconds / 60)}:${String(Math.round(stem.durationSeconds % 60)).padStart(2, "0")}`
-                    : ""}
-                </p>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-zinc-100">{stem.label}</p>
+                  <p className="text-xs text-zinc-500">
+                    {stem.durationSeconds !== null
+                      ? `${Math.floor(stem.durationSeconds / 60)}:${String(Math.round(stem.durationSeconds % 60)).padStart(2, "0")}`
+                      : ""}
+                  </p>
+                </div>
+                <a
+                  href={`/api/jobs/${job.jobId}/downloads?kind=stem&stem=${stem.id}`}
+                  className="shrink-0 rounded-full border border-zinc-700 px-4 py-1.5 text-xs font-semibold text-zinc-200 hover:border-zinc-500 hover:text-white"
+                  download
+                >
+                  Download
+                </a>
               </div>
-              {/* Download buttons arrive with Task 14 (signed downloads). */}
-              <span className="text-xs text-zinc-600">. previews soon</span>
+              <audio
+                controls
+                preload="none"
+                src={`/api/jobs/${job.jobId}/downloads?kind=stem&stem=${stem.id}`}
+                className="mt-3 h-10 w-full"
+                aria-label={`Preview ${stem.label}`}
+              />
             </li>
           ))}
         </ul>
