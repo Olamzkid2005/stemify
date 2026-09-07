@@ -117,6 +117,37 @@ def encode_stem(wav_master: Path, dest: Path, output_format: str) -> None:
         )
 
 
+def write_wav_master(stem_name: str, waveform: Any, dest_dir: Path) -> Path:
+    """Write a float32 WAV master from a numpy (channels, samples) waveform.
+
+    Masters are the single encoding source (plan 12.6): every output format is
+    encoded from these files, never directly from tensors.
+    """
+    try:
+        import numpy as np
+        import soundfile as sf
+    except ImportError as error:
+        raise OutputError(
+            ErrorCode.OUTPUT_ENCODING_FAILED,
+            "numpy/soundfile are required for encoding; "
+            "run: pip install -r worker/requirements.txt",
+        ) from error
+
+    array = np.asarray(waveform, dtype=np.float32)
+    if array.ndim != 2 or array.shape[0] not in (1, 2):
+        raise OutputError(ErrorCode.OUTPUT_ENCODING_FAILED, f"invalid waveform shape {array.shape}")
+    if not np.isfinite(array).all():
+        raise OutputError(ErrorCode.OUTPUT_ENCODING_FAILED, "waveform contains NaN or infinity")
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{stem_name}.wav"
+    try:
+        sf.write(str(dest), array.T, CANONICAL_SAMPLE_RATE, subtype="FLOAT", format="WAV")
+    except Exception as error:
+        raise OutputError(ErrorCode.OUTPUT_ENCODING_FAILED, f"could not write WAV master: {error}") from error
+    return dest
+
+
 def validate_encoded_output(encoded: Path, master_duration_seconds: float) -> Any:
     """Re-probe an encoded stem and enforce the output contract (plan 12.6).
 

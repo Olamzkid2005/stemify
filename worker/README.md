@@ -71,6 +71,23 @@ jobs that pass validation stop with `MODEL_LOAD_FAILED`.
 Warm model reuse: the worker keeps the loaded model in memory across jobs, so
 only the first job in a worker run pays model-load cost.
 
+## Job pipeline (Task 11)
+
+A claimed upload job runs the full local pipeline: ffprobe validation and
+canonical decode (Task 8) → Demucs separation (Task 9) → encoding and ZIP
+packaging (Task 10) → outputs published under `results/{job_id}/` with rows in
+`job_outputs` (the ZIP is recorded with stem key `archive`). Cancellation is
+honored at stage boundaries and finalizes the job as `canceled`; every failure
+path ends in a terminal state with a stable public error code.
+
+Developer commands:
+
+```bash
+python -m worker.cli health     # FFmpeg/SQLite/model-stack readiness report
+python -m worker.cli separate --input ./fixtures/song.mp3 \
+    --mode vocals_instrumental --format mp3 --output ./artifacts
+```
+
 ## Verify
 
 ```bash

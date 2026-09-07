@@ -100,6 +100,10 @@ class ClaimedJob:
     id: str
     source_type: str
     source_object_key: str | None
+    mode: str = "vocals_instrumental"
+    output_format: str = "mp3"
+    source_filename: str | None = None
+    expires_at: int | None = None
 
 
 def _now_ms() -> int:
@@ -145,7 +149,8 @@ class JobQueue:
         try:
             cursor.execute("BEGIN IMMEDIATE")
             row = cursor.execute(
-                "SELECT id, source_type, source_object_key FROM jobs "
+                "SELECT id, source_type, source_object_key, mode, output_format, "
+                "source_filename, expires_at FROM jobs "
                 "WHERE status = 'queued' ORDER BY created_at, id LIMIT 1"
             ).fetchone()
             if row is None:
@@ -161,7 +166,15 @@ class JobQueue:
                 self._connection.execute("ROLLBACK")
                 return None
             self._connection.execute("COMMIT")
-            return ClaimedJob(id=row[0], source_type=row[1], source_object_key=row[2])
+            return ClaimedJob(
+                id=row[0],
+                source_type=row[1],
+                source_object_key=row[2],
+                mode=row[3],
+                output_format=row[4],
+                source_filename=row[5],
+                expires_at=row[6],
+            )
         except BaseException:
             self._connection.execute("ROLLBACK")
             raise
@@ -186,6 +199,77 @@ class JobQueue:
             "WHERE id = ? AND status IN ('queued', 'processing')",
             (code.value, message_public, _diagnostic_reference(), now, now, job_id),
         )
+
+    def is_cancel_requested(self, job_id: str) -> bool:
+        """Cancellation flag read (plan Section 9.5); cheap, one indexed lookup."""
+        row = self._connection.execute(
+            "SELECT cancel_requested FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        return bool(row and row[0])
+
+    def cancel_queued_job(self, job_id: str) -> bool:
+        """Cancel a queued job immediately; False for non-queued jobs."""
+        now = _now_ms()
+        cursor = self._connection.execute(
+            "UPDATE jobs SET status = 'canceled', completed_at = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'queued'",
+            (now, now, job_id),
+        )
+        return cursor.rowcount == 1
+
+    def record_output(
+        self,
+        job_id: str,
+        stem_key: str,
+        label: str,
+        relative_path: str,
+        mime_type: str,
+        size_bytes: int,
+        duration_seconds: float,
+        sha256: str,
+        expires_at: int | None,
+    ) -> None:
+        """Insert one completed output row (plan Section 11.2)."""
+        self._connection.execute(
+            "INSERT INTO job_outputs "
+            "(id, job_id, stem_key, label, relative_path, mime_type, size_bytes, "
+            " duration_seconds, sha256, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"out_{uuid.uuid4().hex[:24]}",
+                job_id,
+                stem_key,
+                label,
+                relative_path,
+                mime_type,
+                size_bytes,
+                duration_seconds,
+                sha256,
+                _now_ms(),
+                expires_at,
+            ),
+        )
+
+    def complete_job(self, job_id: str) -> bool:
+        """Mark a processing job completed; False if it is no longer processing."""
+        now = _now_ms()
+        cursor = self._connection.execute(
+            "UPDATE jobs SET status = 'completed', stage = 'completed', progress = 100, "
+            "completed_at = ?, updated_at = ? WHERE id = ? AND status = 'processing'",
+            (now, now, job_id),
+        )
+        return cursor.rowcount == 1
+
+    def cancel_processing_job(self, job_id: str) -> bool:
+        """Finalize a processing job as canceled (plan Section 9.5: never completed)."""
+        now = _now_ms()
+        cursor = self._connection.execute(
+            "UPDATE jobs SET status = 'canceled', error_code = ?, "
+            "error_message_public = ?, completed_at = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'processing'",
+            (ErrorCode.CANCELED.value, "This job was canceled.", now, now, job_id),
+        )
+        return cursor.rowcount == 1
 
     def recover_stale_processing_jobs(self) -> int:
         """Fail jobs left in processing by a previous run (plan Section 13.2).
