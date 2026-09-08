@@ -20,19 +20,36 @@ jobs:
       - run: npm run build -w apps/web
 
   worker:
-    name: Worker tests and lint
+    name: Worker tests and lint (py${{ matrix.python-version }}, torch ${{ matrix.torch-version }})
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: worker
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Original pin set: torch 2.5.1 supports Python 3.12 but has no 3.13 wheels.
+          - python-version: "3.12"
+            torch-version: "2.5.1"
+            torch-index: "https://download.pytorch.org/whl/cpu"
+          # Python 3.13 needs torch >= 2.6; exercises the weights_only compat shim.
+          - python-version: "3.13"
+            torch-version: "2.6.0"
+            torch-index: "https://download.pytorch.org/whl/cpu"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: pip install -r requirements-dev.txt
-      - run: ruff check .
-      - run: python -m pytest
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      # Runtime stack first (torch from the CPU wheel index), then dev tooling.
+      - run: >
+          pip install torch==${{ matrix.torch-version }} torchaudio==${{ matrix.torch-version }}
+          --index-url ${{ matrix.torch-index }}
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: ruff check worker tests
+      - run: python -m pytest -v
 
   contracts:
     name: Contract schema validation
