@@ -109,6 +109,7 @@ class ClaimedJob:
     output_format: str = "mp3"
     source_filename: str | None = None
     expires_at: int | None = None
+    source_url: str | None = None
 
 
 def _now_ms() -> int:
@@ -165,7 +166,7 @@ class JobQueue:
             cursor.execute("BEGIN IMMEDIATE")
             row = cursor.execute(
                 "SELECT id, source_type, source_object_key, mode, output_format, "
-                "source_filename, expires_at FROM jobs "
+                "source_filename, expires_at, source_url FROM jobs "
                 "WHERE status = 'queued' ORDER BY created_at, id LIMIT 1"
             ).fetchone()
             if row is None:
@@ -189,6 +190,7 @@ class JobQueue:
                 output_format=row[4],
                 source_filename=row[5],
                 expires_at=row[6],
+                source_url=row[7],
             )
         except BaseException:
             self._connection.execute("ROLLBACK")

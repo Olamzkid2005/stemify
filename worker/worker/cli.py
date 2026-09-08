@@ -27,7 +27,8 @@ def _check_ffmpeg() -> tuple[bool, str]:
 
 def _check_python_packages() -> dict[str, bool]:
     results = {}
-    for module in ("numpy", "torch", "torchaudio", "soundfile", "demucs"):
+    # yt-dlp is optional (YouTube input only); report it, never gate on it.
+    for module in ("numpy", "torch", "torchaudio", "soundfile", "demucs", "yt_dlp"):
         try:
             __import__(module)
             results[module] = True
@@ -86,8 +87,10 @@ def command_health(_args: argparse.Namespace) -> int:
 
     core_ok = ffmpeg_ok and packages["numpy"] and packages["soundfile"] and data_ok
     engine_ok = core_ok and packages["torch"] and packages["demucs"] and profile_ok
+    youtube_ok = packages.get("yt_dlp", False)
     print(f"control plane: {'ready' if core_ok else 'NOT READY'}")
     print(f"separation engine: {'ready' if engine_ok else 'NOT READY (pip install -r worker/requirements.txt)'}")
+    print(f"youtube input: {'ready' if youtube_ok else 'unavailable (optional; pip install yt-dlp)'}")
     return 0 if core_ok else 1
 
 

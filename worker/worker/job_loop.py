@@ -33,6 +33,7 @@ from worker.pipeline import (
     run_separation_stage,
 )
 from worker.stages import Stage
+from worker.youtube import download_audio
 
 DEFAULT_POLL_MS = 500
 
@@ -117,26 +118,39 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
     """Run one attempt. Every path ends in a terminal or still-queued state."""
     job_output_dir = None
     try:
+        staged: Path | None = None
+        source: Path | None = None
+
         if job.source_type == "youtube":
-            queue.fail_job(job.id, ErrorCode.DOWNLOAD_FAILED, _public_message(ErrorCode.DOWNLOAD_FAILED))
-            return
-
-        queue.update_progress(job.id, Stage.VALIDATING, 15)
-
-        if not job.source_object_key:
+            # Optional YouTube input (plan Task 14 / Section 9.6): the worker
+            # downloads with controlled yt-dlp arguments into the job temp
+            # directory, then the normal validation/separation path runs on it.
+            if not job.source_url:
+                queue.fail_job(job.id, ErrorCode.DOWNLOAD_FAILED, _public_message(ErrorCode.DOWNLOAD_FAILED))
+                return
+        elif not job.source_object_key:
             queue.fail_job(job.id, ErrorCode.INVALID_AUDIO, _public_message(ErrorCode.INVALID_AUDIO))
             return
 
-        # Objects live at <data_dir>/<object_key> (web LocalStorage layout).
-        source = queue.data_dir / job.source_object_key
+        # Upload objects live at <data_dir>/<object_key> (web LocalStorage layout).
+        if job.source_object_key:
+            source = queue.data_dir / job.source_object_key
+
         with JobTempDir() as job_dir:
-            inbox = job_dir / "source"
-            inbox.mkdir()
-            staged = inbox / (job.source_filename or source.name or "source")
-            try:
-                staged.symlink_to(source.resolve())
-            except OSError:  # filesystems without symlink support (e.g. Windows)
-                shutil.copy(source, staged)
+            if job.source_type == "youtube":
+                queue.update_progress(job.id, Stage.DOWNLOADING, 10)
+                download_dir = job_dir / "download"
+                download_dir.mkdir()
+                staged = download_audio(job.source_url, download_dir)
+            else:
+                queue.update_progress(job.id, Stage.VALIDATING, 15)
+                inbox = job_dir / "source"
+                inbox.mkdir()
+                staged = inbox / (job.source_filename or (source.name if source else "source"))
+                try:
+                    staged.symlink_to(source.resolve())
+                except OSError:  # filesystems without symlink support (e.g. Windows)
+                    shutil.copy(source, staged)
 
             queue.update_progress(job.id, Stage.PREPARING_AUDIO, 25)
             canonical_wav, probe = prepare_source(staged, job_dir)
@@ -168,7 +182,10 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                 job_dir=job_dir,
                 mode=job.mode,
                 output_format=job.output_format,
-                source_display_name=job.source_filename or source.name or "source",
+                source_display_name=(
+                    job.source_filename
+                    or (source.name if source else staged.name if staged else "source")
+                ),
                 source_duration_seconds=probe.duration_seconds,
                 source_sample_rate=probe.sample_rate,
                 source_channels=probe.channels,
@@ -204,7 +221,7 @@ def _public_message(code: ErrorCode) -> str:
     if code == ErrorCode.CANCELED:
         return "This job was canceled."
     if code == ErrorCode.DOWNLOAD_FAILED:
-        return "YouTube sources are not supported yet."
+        return "The download failed, or the source is not supported."
     if code == ErrorCode.MODEL_LOAD_FAILED:
         return "The separation engine is unavailable. Run: pip install -r worker/requirements.txt"
     if code == ErrorCode.GPU_OUT_OF_MEMORY:
