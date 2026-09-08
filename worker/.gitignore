@@ -21,6 +21,10 @@ wheels/
 venv/
 .venv/
 
+# Local pip --target runtime deps (see requirements.txt; re-downloadable)
+.runtime/
+.uv-python/
+
 # Packaging
 *.manifest
 *.spec

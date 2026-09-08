@@ -55,6 +55,27 @@ def install_stub_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace separation with a deterministic split; everything else is real."""
     import numpy as np
 
+    class _FakeTensor:
+        """Minimal stand-in for torch.Tensor: .to()[None], .cpu().numpy()."""
+
+        def __init__(self, array: Any) -> None:
+            self._array = np.asarray(array)
+
+        def to(self, _device: object) -> _FakeTensor:
+            return self
+
+        def cpu(self) -> _FakeTensor:
+            return self
+
+        def numpy(self) -> Any:
+            return self._array
+
+        def __getitem__(self, item: Any) -> _FakeTensor:
+            return _FakeTensor(self._array[item])
+
+        def __array__(self, dtype: Any = None) -> Any:
+            return self._array if dtype is None else self._array.astype(dtype)
+
     class _FakeTorch:
         float32 = np.float32
 
@@ -68,7 +89,7 @@ def install_stub_engine(monkeypatch: pytest.MonkeyPatch) -> None:
                 return None
 
         class no_grad:
-            def __enter__(self) -> "object":
+            def __enter__(self) -> object:
                 return self
 
             def __exit__(self, *args: object) -> None:
@@ -76,24 +97,26 @@ def install_stub_engine(monkeypatch: pytest.MonkeyPatch) -> None:
 
         @staticmethod
         def from_numpy(array: Any) -> Any:
-            return array
+            return _FakeTensor(array)
 
     class _FakeModel:
-        sources = ["drums", "bass", "other", "vocals"]
+        sources = ("drums", "bass", "other", "vocals")
 
-        def to(self, device: object) -> "_FakeModel":
+        def to(self, device: object) -> _FakeModel:
             return self
 
-        def eval(self) -> "_FakeModel":
+        def eval(self) -> _FakeModel:
             return self
 
     def fake_apply_model(model: Any, tensor: Any, **kwargs: Any) -> Any:
-        # tensor is a numpy array here (FakeTorch.from_numpy is identity);
+        # tensor is a _FakeTensor over numpy (FakeTorch.from_numpy wraps it);
         # shape (1, channels, samples). Return zeros per source: the stub's
         # "vocals" is silence, so instrumental == mixture (mixture-consistent).
         array = np.asarray(tensor)
         sources = len(model.sources)
-        return np.zeros((1, sources, array.shape[1], array.shape[2]), dtype=np.float32)
+        return _FakeTensor(
+            np.zeros((1, sources, array.shape[1], array.shape[2]), dtype=np.float32)
+        )
 
     fake_apply_module = types.ModuleType("demucs.apply")
     fake_apply_module.apply_model = fake_apply_model  # type: ignore[attr-defined]

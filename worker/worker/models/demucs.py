@@ -15,10 +15,12 @@ Inference policy (fixed for this adapter):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from worker.errors import ErrorCode
 from worker.models.base import ModelProfile, SeparationError
@@ -41,6 +43,43 @@ _INSTALL_HINT = (
 # Gross clipping/overflow bound for sanity checks; normalised audio stays well
 # below this even for mixture-minus-vocals stems.
 MAX_ABSOLUTE_AMPLITUDE = 8.0
+
+
+@contextlib.contextmanager
+def _weights_only_compat() -> Iterator[None]:
+    """Force weights_only=False on torch.load for demucs checkpoint loads.
+
+    torch >= 2.6 resolves an unset weights_only to True, which rejects the
+    pickled objects inside demucs 4.0.1 checkpoints (they were serialized with
+    torch <= 2.5 defaults). demucs 4.0.1 calls torch.load without passing the
+    flag, so patch it for the duration of the load call only.
+
+    This is safe here because checkpoint integrity is enforced independently:
+    torch.hub downloads with check_hash=True and _verify_checkpoint_checksum
+    re-hashes the cached file against the allowlisted profile checksum.
+    """
+    try:
+        import torch
+    except ImportError:
+        # Lazy-import contract: no torch in the environment is handled by the
+        # _import_torch path; nothing to patch here.
+        yield
+        return
+    if tuple(int(p) for p in torch.__version__.split("+", 1)[0].split(".")[:2]) < (2, 6):
+        yield
+        return
+
+    original_load = torch.load
+
+    def _load_without_weights_only(*args: Any, **kwargs: Any) -> Any:
+        kwargs["weights_only"] = False
+        return original_load(*args, **kwargs)
+
+    torch.load = _load_without_weights_only  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        torch.load = original_load  # type: ignore[assignment]
 
 
 def resolve_device(requested: str | None = None) -> str:
@@ -84,7 +123,8 @@ def load_model(
     _configure_model_cache(model_dir or _default_model_dir())
     demucs_pretrained = _import_demucs_pretrained()
     try:
-        model = demucs_pretrained.get_model(profile.model_id)
+        with _weights_only_compat():
+            model = demucs_pretrained.get_model(profile.model_id)
         model.to(resolved)
         model.eval()
     except SeparationError:
@@ -124,7 +164,7 @@ def separate(
 
     tensor: Any = None
     try:
-        tensor = th.from_numpy(waveform.astype(th.float32)).to(device)[None]  # (1, channels, samples)
+        tensor = th.from_numpy(waveform.astype("float32")).to(device)[None]  # (1, channels, samples)
         if progress_callback:
             progress_callback(0.0)
         from demucs.apply import apply_model

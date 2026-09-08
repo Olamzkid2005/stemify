@@ -200,12 +200,12 @@ def _master_duration(master: Path) -> float:
 
 __all__ = [
     "PIPELINE_STAGES",
+    "InputAudioError",
+    "OutputError",
+    "SeparationError",
     "StageResult",
     "encode_stems_stage",
+    "get_profile",
     "package_stage",
     "run_separation_stage",
-    "get_profile",
-    "InputAudioError",
-    "SeparationError",
-    "OutputError",
 ]

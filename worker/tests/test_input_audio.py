@@ -14,8 +14,8 @@ import pytest
 
 from worker.errors import ErrorCode
 from worker.input_audio import (
-    JobTempDir,
     InputAudioError,
+    JobTempDir,
     _require_ffmpeg_tool,
     decode_to_waveform,
     prepare_source,
@@ -62,9 +62,8 @@ def test_temp_dir_cleans_up_on_success_and_failure() -> None:
         survivor.write_text("data")
     assert not survivor.exists()
 
-    with pytest.raises(RuntimeError):
-        with JobTempDir() as job_dir2:
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), JobTempDir() as job_dir2:
+        raise RuntimeError("boom")
     assert not job_dir2.exists()
 
 
@@ -147,9 +146,8 @@ def test_oversize_file_is_limit_exceeded(tmp_path: Path, monkeypatch: pytest.Mon
 def test_source_outside_job_dir_is_rejected(tmp_path: Path) -> None:
     src = tmp_path / "outside.mp3"
     make_audio(src, 0.5)
-    with JobTempDir() as job_dir:
-        with pytest.raises(InputAudioError) as excinfo:
-            prepare_source(src, job_dir)
+    with JobTempDir() as job_dir, pytest.raises(InputAudioError) as excinfo:
+        prepare_source(src, job_dir)
     assert excinfo.value.code == ErrorCode.INVALID_AUDIO
 
 

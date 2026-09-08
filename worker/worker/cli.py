@@ -94,8 +94,8 @@ def command_separate(args: argparse.Namespace) -> int:
     from worker.encoding import OutputError
     from worker.input_audio import InputAudioError, JobTempDir, prepare_source
     from worker.models.base import SeparationError
-    from worker.pipeline import encode_stems_stage, package_stage, run_separation_stage
     from worker.models.profiles import get_profile
+    from worker.pipeline import encode_stems_stage, package_stage, run_separation_stage
 
     source = Path(args.input).resolve()
     output_root = Path(args.output).resolve()

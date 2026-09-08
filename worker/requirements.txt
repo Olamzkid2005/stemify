@@ -6,11 +6,15 @@
 #   NVIDIA GPU (optional):   pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
 #                            pip install -r requirements.txt
 #
-# torch is pinned below 2.6: demucs 4.0.1 checkpoint loading breaks with the
-# torch 2.6 `weights_only=True` default for torch.load.
+# torch >= 2.5.1: demucs 4.0.1 checkpoints were serialized with torch <= 2.5
+# defaults, and torch 2.6+ resolves an unset weights_only to True, which
+# rejects them. The adapter (worker/models/demucs.py) patches torch.load with
+# weights_only=False for the duration of each checkpoint load; integrity is
+# enforced separately via torch.hub check_hash=True and the profile checksum.
+# On Python 3.13 use torch/torchaudio >= 2.6 (2.5.1 has no 3.13 wheels).
 
 demucs==4.0.1
 numpy==2.1.3
-torch==2.5.1
-torchaudio==2.5.1
+torch>=2.5.1
+torchaudio>=2.5.1
 soundfile==0.12.1

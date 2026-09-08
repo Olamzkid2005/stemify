@@ -190,7 +190,7 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
             queue.fail_job(job.id, error.code, _public_message(error.code))
     except OutputError as error:
         queue.fail_job(job.id, error.code, _public_message(error.code))
-    except Exception:
+    except Exception:  # noqa: BLE001 - deliberate catch-all: any unexpected error must end the job as UNKNOWN, never leave it processing
         queue.fail_job(job.id, ErrorCode.UNKNOWN, _public_message(ErrorCode.UNKNOWN))
 
 

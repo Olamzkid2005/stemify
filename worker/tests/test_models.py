@@ -57,7 +57,7 @@ class _FakeTorch:
 
     float32 = "float32"
 
-    class cuda:  # noqa: N801 - mirrors torch.cuda
+    class cuda:
         @staticmethod
         def is_available() -> bool:
             return False
@@ -66,8 +66,8 @@ class _FakeTorch:
         def empty_cache() -> None:
             return None
 
-    class no_grad:  # noqa: N801 - mirrors torch.no_grad
-        def __enter__(self) -> "_FakeTorch.no_grad":
+    class no_grad:
+        def __enter__(self) -> _FakeTorch.no_grad:
             return self
 
         def __exit__(self, *args: object) -> None:
@@ -84,10 +84,10 @@ class _FakeTensor:
     def __init__(self, array: Any) -> None:
         self._array = array
 
-    def astype(self, dtype: Any) -> "_FakeTensor":
+    def astype(self, dtype: Any) -> _FakeTensor:
         return self
 
-    def to(self, device: Any) -> "_FakeTensor":
+    def to(self, device: Any) -> _FakeTensor:
         return self
 
     def __getitem__(self, item: Any) -> Any:
@@ -100,10 +100,10 @@ class _FakeModel:
     def __init__(self, sources: list[str]) -> None:
         self.sources = sources
 
-    def to(self, device: object) -> "_FakeModel":
+    def to(self, device: object) -> _FakeModel:
         return self
 
-    def eval(self) -> "_FakeModel":
+    def eval(self) -> _FakeModel:
         return self
 
 
@@ -142,7 +142,7 @@ def _install_fake_engine(monkeypatch: pytest.MonkeyPatch, profile: Any) -> dict[
         sources = len(model.sources)
 
         class _Estimates:
-            def cpu(self) -> "_Estimates":
+            def cpu(self) -> _Estimates:
                 return self
 
             def numpy(self) -> Any:
@@ -284,3 +284,89 @@ def test_model_metadata_is_safe() -> None:
     assert metadata["sample_rate"] == 44100
     assert "absolute" not in str(metadata).lower()
     assert isinstance(metadata["model_stems"], list)
+
+
+class _RealTorchLike:
+    """torch stand-in exposing a load() whose calls the shim can capture."""
+
+    version = "2.6.0"
+
+    def __init__(self) -> None:
+        self.load_calls: list[dict[str, Any]] = []
+
+    def load(self, *args: Any, **kwargs: Any) -> Any:
+        self.load_calls.append(kwargs)
+        return {}
+
+
+def _install_fake_torch_module(monkeypatch: pytest.MonkeyPatch, fake: Any) -> None:
+    import types
+
+    module = types.ModuleType("torch")
+    module.__version__ = fake.version
+    module.load = fake.load
+    monkeypatch.setitem(sys.modules, "torch", module)
+
+
+def test_weights_only_compat_forces_false_on_torch_2_6(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """torch >= 2.6 defaults weights_only to True; the shim must force False."""
+    fake = _RealTorchLike()
+    fake.cuda = None  # the shim only touches torch.load
+    _install_fake_torch_module(monkeypatch, fake)
+
+    with demucs_module._weights_only_compat():
+        import torch
+
+        torch.load("checkpoint.th")
+
+    assert len(fake.load_calls) == 1
+    assert fake.load_calls[0].get("weights_only") is False
+
+
+def test_weights_only_compat_restores_torch_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _RealTorchLike()
+    _install_fake_torch_module(monkeypatch, fake)
+
+    with demucs_module._weights_only_compat():
+        import torch
+
+        torch.load("checkpoint.th")  # wrapped: forced weights_only=False
+
+    import torch
+
+    torch.load("checkpoint.th")  # restored: no forced kwarg
+
+    assert len(fake.load_calls) == 2
+    assert fake.load_calls[0].get("weights_only") is False
+    assert "weights_only" not in fake.load_calls[1]
+
+
+def test_weights_only_compat_skips_torch_below_2_6(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On torch <= 2.5 the default is already False; the shim must not patch."""
+    fake = _RealTorchLike()
+    fake.version = "2.5.1"
+    _install_fake_torch_module(monkeypatch, fake)
+
+    with demucs_module._weights_only_compat():
+        import torch
+
+        torch.load("checkpoint.th")
+
+    assert len(fake.load_calls) == 1
+    assert "weights_only" not in fake.load_calls[0]
+
+
+def test_weights_only_compat_survives_missing_torch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No torch installed: the shim is a no-op, not an ImportError."""
+    monkeypatch.setitem(sys.modules, "torch", None)  # blocks `import torch`
+
+    with demucs_module._weights_only_compat():
+        pass  # must not raise
