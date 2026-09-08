@@ -137,4 +137,9 @@ CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS jobs_expires_at_idx ON jobs(expires_at);
 CREATE INDEX IF NOT EXISTS job_outputs_job_id_idx ON job_outputs(job_id);
 CREATE INDEX IF NOT EXISTS job_events_job_id_idx ON job_events(job_id);
+
+CREATE TABLE IF NOT EXISTS worker_heartbeat (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  updated_at INTEGER NOT NULL
+);
 `;

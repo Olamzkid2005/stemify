@@ -6,6 +6,7 @@
  */
 import { db } from "@/lib/db/client";
 import { type JobOutputRow, type JobRow } from "@/lib/db/schema";
+import { workerStatus } from "@/lib/worker-status";
 import { isTerminalStatus, type JobView } from "./job-view-types";
 
 const USER_STAGES: Record<string, string> = {
@@ -68,6 +69,11 @@ export async function getJobView(jobId: string, ownerKey: string): Promise<JobVi
   if (job.status === "failed") {
     view.errorCode = job.error_code ?? "UNKNOWN";
     view.errorMessage = job.error_message_public;
+  }
+
+  // Task 13: non-sensitive worker-unavailable signal for active jobs only.
+  if (job.status === "queued" || job.status === "processing") {
+    view.workerRunning = workerStatus().running;
   }
 
   return view;

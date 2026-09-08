@@ -21,6 +21,8 @@ export type JobView = {
   // failed only:
   errorCode?: string;
   errorMessage?: string | null;
+  // Task 13: false only while a queued/processing job sees a stale worker heartbeat.
+  workerRunning?: boolean;
 };
 
 const TERMINAL = new Set(["completed", "failed", "canceled", "expired"]);

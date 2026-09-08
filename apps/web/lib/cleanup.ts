@@ -154,7 +154,7 @@ export async function runCleanup(now = nowMs()): Promise<CleanupReport> {
 
   let orphanedUploadObjectsDeleted = 0;
   try {
-    orphanedUploadObjectsDeleted = await deleteOrphanedUploadObjects(now);
+    orphanedUploadObjectsDeleted = await deleteOrphanedUploadObjects();
   } catch (error) {
     errors.push(`orphan cleanup: ${String(error)}`);
   }

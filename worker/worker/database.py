@@ -92,6 +92,11 @@ CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS jobs_expires_at_idx ON jobs(expires_at);
 CREATE INDEX IF NOT EXISTS job_outputs_job_id_idx ON job_outputs(job_id);
 CREATE INDEX IF NOT EXISTS job_events_job_id_idx ON job_events(job_id);
+
+CREATE TABLE IF NOT EXISTS worker_heartbeat (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  updated_at INTEGER NOT NULL
+);
 """
 
 
@@ -290,6 +295,25 @@ class JobQueue:
             (ErrorCode.CANCELED.value, "This job was canceled.", now, now, job_id),
         )
         return cursor.rowcount == 1
+
+    def write_heartbeat(self) -> None:
+        """Upsert the single worker-liveness row (plan Section 19.2).
+
+        The web app compares updated_at against its own clock to show a
+        non-sensitive worker-unavailable state when the worker is not running.
+        """
+        self._connection.execute(
+            "INSERT INTO worker_heartbeat (id, updated_at) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at",
+            (_now_ms(),),
+        )
+
+    def heartbeat_age_ms(self) -> int | None:
+        """Milliseconds since the last heartbeat, or None if never written."""
+        row = self._connection.execute(
+            "SELECT updated_at FROM worker_heartbeat WHERE id = 1"
+        ).fetchone()
+        return None if row is None else max(0, _now_ms() - row[0])
 
     def recover_stale_processing_jobs(self) -> int:
         """Fail jobs left in processing by a previous run (plan Section 13.2).

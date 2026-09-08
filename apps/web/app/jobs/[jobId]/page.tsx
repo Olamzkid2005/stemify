@@ -171,6 +171,18 @@ export default function JobPage() {
         {job.userStage}
       </p>
 
+      {job.workerRunning === false ? (
+        <p
+          role="status"
+          className="rounded-xl border border-amber-900/60 bg-amber-950/40 px-4 py-3 text-xs text-amber-200"
+        >
+          The local processing worker is not running. Start it with
+          <code className="mx-1 rounded bg-black/40 px-1.5 py-0.5">./start.sh</code>
+          or <code className="rounded bg-black/40 px-1.5 py-0.5">python -m worker.job_loop</code>
+          — this job will resume automatically once it is up.
+        </p>
+      ) : null}
+
       <ol className="w-full space-y-2 text-left" aria-label="Processing stages">
         {STAGE_ORDER.map((stage, i) => (
           <li

@@ -17,6 +17,7 @@ import os
 import shutil
 import signal
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -215,11 +216,33 @@ def _public_message(code: ErrorCode) -> str:
     return "Something went wrong while processing this job."
 
 
+HEARTBEAT_INTERVAL_MS = 5000
+
+
+def _heartbeat_loop(queue: JobQueue, stop: threading.Event) -> None:
+    """Write the liveness row every few seconds (plan Section 19.2).
+
+    Runs on a daemon thread so the heartbeat keeps ticking while a long
+    separation blocks the main loop; the web UI reads this row to show its
+    non-sensitive worker-unavailable state.
+    """
+    while not stop.is_set():
+        try:
+            queue.write_heartbeat()
+        except Exception:  # noqa: BLE001,S110 - heartbeat must never kill the worker; retried next tick
+            pass
+        stop.wait(HEARTBEAT_INTERVAL_MS / 1000)
+
+
 def run(stop_after_iterations: int | None = None) -> None:
     queue = JobQueue()
     queue.recover_stale_processing_jobs()
+    queue.write_heartbeat()
     poll_seconds = _poll_seconds()
     print(f"worker: polling {queue.database_path} every {poll_seconds:.2f}s", flush=True)
+    stop = threading.Event()
+    heartbeat = threading.Thread(target=_heartbeat_loop, args=(queue, stop), daemon=True)
+    heartbeat.start()
     try:
         iterations = 0
         with _graceful_shutdown():
@@ -233,6 +256,8 @@ def run(stop_after_iterations: int | None = None) -> None:
                 process_job(queue, job)
                 print(f"worker: finished job {job.id}", flush=True)
     finally:
+        stop.set()
+        heartbeat.join(timeout=HEARTBEAT_INTERVAL_MS / 1000)
         queue.close()
 
 
