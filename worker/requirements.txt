@@ -19,6 +19,10 @@ torch>=2.5.1
 torchaudio>=2.5.1
 soundfile==0.12.1
 
+# Optional: benchmark RAM reporting only (plan Task 16). The benchmark and
+# health checks degrade gracefully when it is absent.
+psutil
+
 # Optional: YouTube input only (plan Task 14). The upload flow never needs
 # this; without it, YouTube jobs fail with DOWNLOAD_FAILED (fail safely).
 yt-dlp
