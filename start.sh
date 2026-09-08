@@ -31,6 +31,61 @@ if [ -f .env ]; then
   set +a
 fi
 
+# Normalize STEMIFY_DATA_DIR to an absolute path: the web process runs with
+# apps/web as cwd and the worker with worker/, so a relative value would
+# resolve to a different directory per process and the app would be split.
+case "$STEMIFY_DATA_DIR" in
+  /*|?[A-Za-z]:*) ;; # already absolute (POSIX or drive form)
+  *) STEMIFY_DATA_DIR="$(pwd)/${STEMIFY_DATA_DIR#./}" ;;
+esac
+# MSYS/Git Bash: hand native Windows processes a drive path (C:/...), not /c/...
+command -v cygpath >/dev/null 2>&1 && STEMIFY_DATA_DIR="$(cygpath -m "$STEMIFY_DATA_DIR")"
+export STEMIFY_DATA_DIR
+
+# Resolve a Python that can actually run the worker. Bare `python` may be an
+# interpreter without the project's deps; prefer one that can import them,
+# optionally with a project-local pip --target dir prepended to PYTHONPATH
+# (worker/.runtime — see worker/README.md).
+resolve_worker_python() {
+  local target=""
+  if [ -d worker/.runtime ]; then
+    target="$(cd worker/.runtime && pwd)"
+  fi
+  # Candidates as "interpreter|version-arg"; empty arg = no selector.
+  local cand interp args
+  for cand in "python3|" "python|" "py|-3.13" "py|-3.14" "py|-3.12" "py|"; do
+    interp="${cand%%|*}"
+    args="${cand#*|}"
+    command -v "$interp" >/dev/null 2>&1 || continue
+    if [ -n "$target" ]; then
+      if PYTHONPATH="$target" "$interp" ${args:+"$args"} -c "import numpy, soundfile" >/dev/null 2>&1; then
+        STEMIFY_PYTHON_BIN="$interp"
+        STEMIFY_PYTHON_ARGS="$args"
+        STEMIFY_PYTHON_PATH="$target"
+        return 0
+      fi
+    elif "$interp" ${args:+"$args"} -c "import numpy, soundfile" >/dev/null 2>&1; then
+      STEMIFY_PYTHON_BIN="$interp"
+      STEMIFY_PYTHON_ARGS="$args"
+      STEMIFY_PYTHON_PATH=""
+      return 0
+    fi
+  done
+  return 1
+}
+
+STEMIFY_PYTHON_BIN="python"
+STEMIFY_PYTHON_ARGS=""
+STEMIFY_PYTHON_PATH=""
+if resolve_worker_python; then
+  echo "Worker Python: ${STEMIFY_PYTHON_BIN} ${STEMIFY_PYTHON_ARGS}" \
+    "(PYTHONPATH=${STEMIFY_PYTHON_PATH:-system})"
+  [ -n "$STEMIFY_PYTHON_PATH" ] && export PYTHONPATH="$STEMIFY_PYTHON_PATH${PYTHONPATH:+:$PYTHONPATH}"
+else
+  echo "No Python with numpy/soundfile found; worker will not start" \
+    "(see worker/README.md)." >&2
+fi
+
 if [ "${STEMIFY_SKIP_PREFLIGHT:-0}" != "1" ]; then
   echo "== Stemify startup checks =="
 
@@ -54,12 +109,11 @@ if [ "${STEMIFY_SKIP_PREFLIGHT:-0}" != "1" ]; then
   fi
 
   # Python runtime deps are checked through the worker's own health command,
-  # which knows the exact import set (numpy, torch, soundfile, ...).
-  if command -v python >/dev/null 2>&1; then
-    if ! python -m worker.cli health >/dev/null 2>&1; then
-      echo "Python runtime check failed (continuing; the worker will fail jobs"
-      echo "with a setup message until 'pip install -r worker/requirements.txt' succeeds)."
-    fi
+  # which knows the exact import set (numpy, torch, soundfile, ...). The worker
+  # package lives at worker/worker/, so module runs must use worker/ as cwd.
+  if ! ( cd worker && "${STEMIFY_PYTHON_BIN}" ${STEMIFY_PYTHON_ARGS} -m worker.cli health ) >/dev/null 2>&1; then
+    echo "Python runtime check failed (continuing; the worker will fail jobs"
+    echo "with a setup message until 'pip install -r worker/requirements.txt' succeeds)."
   fi
 
   if [ "$PREFLIGHT_FAILED" != "0" ]; then
@@ -95,13 +149,16 @@ HOSTNAME=127.0.0.1 npm run dev -w apps/web &
 WEB_PID=$(jobs -p | tail -1)
 
 # Python worker process; a missing runtime degrades to web-only operation
-# (upload UI works, jobs fail with a clear setup message).
-if python -c "import numpy, soundfile" >/dev/null 2>&1; then
-  python -m worker.job_loop &
+# (upload UI works, jobs fail with a clear setup message). Runs with worker/ as
+# cwd: the `worker` package is worker/worker/, and `python -m worker.job_loop`
+# from the repo root would not resolve it. PYTHONPATH (set during resolution)
+# carries the project-local dependency dir when one is in use.
+if "${STEMIFY_PYTHON_BIN}" ${STEMIFY_PYTHON_ARGS} -c "import numpy, soundfile" >/dev/null 2>&1; then
+  ( cd worker && exec "${STEMIFY_PYTHON_BIN}" ${STEMIFY_PYTHON_ARGS} -m worker.job_loop ) &
   WORKER_PID=$(jobs -p | tail -1)
   echo "Worker started (pid $WORKER_PID)"
 else
-  echo "Worker not started: python numpy/soundfile missing (pip install -r worker/requirements.txt)" >&2
+  echo "Worker not started: no Python with numpy/soundfile found (see worker/README.md)" >&2
 fi
 
 wait "$WEB_PID"

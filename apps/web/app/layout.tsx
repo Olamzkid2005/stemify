@@ -1,15 +1,21 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const inter = Inter({
+// Self-hosted variable fonts (OFL-licensed, latin subset): the app must boot
+// with no network access, so Google Fonts is not fetched at build/dev time.
+const inter = localFont({
+  src: "./fonts/inter-latin-wght-normal.woff2",
   variable: "--font-inter",
-  subsets: ["latin"],
+  weight: "100 900",
+  display: "swap",
 });
 
-const jetbrainsMono = JetBrains_Mono({
+const jetbrainsMono = localFont({
+  src: "./fonts/jetbrains-mono-latin-wght-normal.woff2",
   variable: "--font-jetbrains-mono",
-  subsets: ["latin"],
+  weight: "100 800",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
