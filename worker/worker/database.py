@@ -110,6 +110,16 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _retention_ms() -> int:
+    """Retention window in ms (plan Section 15: JOB_RETENTION_HOURS, default 24)."""
+    raw = os.environ.get("JOB_RETENTION_HOURS", "24")
+    try:
+        hours = float(raw)
+    except ValueError:
+        hours = 24.0
+    return int(max(0.0, hours) * 3_600_000)
+
+
 def _diagnostic_reference() -> str:
     return f"diag_{uuid.uuid4().hex[:12]}"
 
@@ -251,13 +261,23 @@ class JobQueue:
         )
 
     def complete_job(self, job_id: str) -> bool:
-        """Mark a processing job completed; False if it is no longer processing."""
+        """Mark a processing job completed and stamp the retention window (plan Task 13).
+
+        expires_at = completed_at + JOB_RETENTION_HOURS (default 24h) on both the
+        job and its outputs; the local cleanup pass deletes those files later.
+        """
         now = _now_ms()
+        expires_at = now + _retention_ms()
         cursor = self._connection.execute(
             "UPDATE jobs SET status = 'completed', stage = 'completed', progress = 100, "
-            "completed_at = ?, updated_at = ? WHERE id = ? AND status = 'processing'",
-            (now, now, job_id),
+            "completed_at = ?, updated_at = ?, expires_at = ? WHERE id = ? AND status = 'processing'",
+            (now, now, expires_at, job_id),
         )
+        if cursor.rowcount == 1:
+            self._connection.execute(
+                "UPDATE job_outputs SET expires_at = ? WHERE job_id = ? AND expires_at IS NULL",
+                (expires_at, job_id),
+            )
         return cursor.rowcount == 1
 
     def cancel_processing_job(self, job_id: str) -> bool:

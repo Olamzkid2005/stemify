@@ -1,6 +1,7 @@
-"""Worker CLI (plan Section 12.1): health diagnostics and one-shot separation.
+"""Worker CLI (plan Section 12.1): health diagnostics, cleanup, one-shot separation.
 
     python -m worker.cli health
+    python -m worker.cli cleanup
     python -m worker.cli separate --input ./fixtures/song.mp3 \
         --mode vocals_instrumental --format mp3 --output ./artifacts
 """
@@ -136,12 +137,31 @@ def command_separate(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_cleanup(args: argparse.Namespace) -> int:
+    """Run one idempotent cleanup pass (plan Task 13 / Section 19.3)."""
+    from worker.cleanup import run_cleanup
+    from worker.database import JobQueue
+
+    queue = JobQueue()
+    try:
+        report = run_cleanup(queue)
+    finally:
+        queue.close()
+    print(report.summary())
+    for error in report.errors:
+        print(f"error: {error}", file=sys.stderr)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="worker.cli", description="Stemify worker diagnostics")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     health = subparsers.add_parser("health", help="report FFmpeg/SQLite/model readiness")
     health.set_defaults(func=command_health)
+
+    cleanup = subparsers.add_parser("cleanup", help="delete expired jobs, uploads, and stale temp dirs")
+    cleanup.set_defaults(func=command_cleanup)
 
     separate = subparsers.add_parser("separate", help="one-shot separation of a local file")
     separate.add_argument("--input", required=True, help="path to a supported audio file")

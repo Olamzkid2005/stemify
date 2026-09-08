@@ -11,6 +11,9 @@ import { __setStorageForTests } from "@/lib/storage";
 import { createJob } from "@/lib/jobs";
 
 process.env.JOB_ACCESS_TOKEN_SECRET ??= "test-secret-for-local-tests-only";
+// These tests exercise idempotency/ownership, not the Task 13 active-job limit;
+// lift the limit so multiple jobs for one owner don't trip 429s here.
+process.env.MAX_ACTIVE_JOBS = "100";
 
 const OWNER = "gid_testowner0000000001";
 const UPLOAD_ID = `upl_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -41,6 +44,7 @@ describe("createJob", () => {
   });
 
   after(() => {
+    delete process.env.MAX_ACTIVE_JOBS;
     db.run("DELETE FROM jobs WHERE owner_key = ?", OWNER);
     db.run("DELETE FROM uploads WHERE owner_key = ?", OWNER);
     closeDatabase();

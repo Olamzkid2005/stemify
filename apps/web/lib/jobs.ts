@@ -16,7 +16,7 @@ export { OUTPUT_FORMATS, SEPARATION_MODES };
 type CreateJobSuccess = { ok: true; status: 201 | 200; job: { id: string; status: JobStatus } };
 type CreateJobFailure = {
   ok: false;
-  status: 400 | 403 | 409 | 413;
+  status: 400 | 403 | 409 | 413 | 429;
   error: string;
 };
 
@@ -37,6 +37,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Active-job limit (plan Task 13 / Section 15: MAX_ACTIVE_JOBS).
+ * Queued + processing jobs count toward the limit; terminal states do not.
+ */
+function activeJobLimit(): number {
+  const raw = Number(process.env.MAX_ACTIVE_JOBS ?? "1");
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+}
+
+function activeJobCount(ownerKey: string): number {
+  const row = db.get<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM jobs WHERE owner_key = ? AND status IN ('queued', 'processing')",
+    ownerKey,
+  );
+  return row?.n ?? 0;
+}
+
 export async function createJob(input: CreateJobInput): Promise<CreateJobResult> {
   if (!isRecord(input.body)) {
     return { ok: false, status: 400, error: "invalid_request" };
@@ -55,6 +72,11 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
 
   if (!isRecord(source)) {
     return { ok: false, status: 400, error: "invalid_request" };
+  }
+
+  // Active-job limit (plan Task 13): reject before touching storage or rows.
+  if (activeJobCount(input.ownerKey) >= activeJobLimit()) {
+    return { ok: false, status: 429, error: "too_many_active_jobs" };
   }
 
   let sourceFilename: string | null = null;
