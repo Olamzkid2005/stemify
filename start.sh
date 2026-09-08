@@ -88,8 +88,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Web process (foreground log). `jobs -p` instead of $!: set -u treats $! as
-# unset in some Git Bash (MSYS2) builds once a trap is armed.
-npm run dev -w apps/web &
+# unset in some Git Bash (MSYS2) builds once a trap is armed. Bound to
+# 127.0.0.1: the local app must never listen on a LAN interface by default
+# (plan Sections 1051, 22).
+HOSTNAME=127.0.0.1 npm run dev -w apps/web &
 WEB_PID=$(jobs -p | tail -1)
 
 # Python worker process; a missing runtime degrades to web-only operation

@@ -86,7 +86,10 @@ const UNSAFE_CHARS = /[^A-Za-z0-9._-]+/g;
 export function sanitizeFilename(name: string): string {
   const base = name.split(/[\\/]/).pop() ?? "file";
   const cleaned = base.replace(CONTROL_CHARS, "").replace(UNSAFE_CHARS, "_");
-  return cleaned.length > 0 ? cleaned.slice(0, 128) : "file";
+  // Dot-only names ("..", ".") are path segments, not filenames; they must
+  // never survive sanitization into an object key.
+  if (cleaned.length === 0 || /^\.+$/.test(cleaned)) return "file";
+  return cleaned.slice(0, 128);
 }
 
 function sanitizeExt(ext: string): string {

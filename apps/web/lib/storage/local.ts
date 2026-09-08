@@ -18,6 +18,13 @@ export class LocalStorage implements StorageAdapter {
 
   objectPath(objectKey: string): string {
     assertSignableKey(objectKey);
+    // Reject any `..` segment outright: resolving them would let a namespaced
+    // key like `results/../models/x.th` reach sibling directories of the data
+    // directory that are still outside the object namespace.
+    const segments = objectKey.split("/");
+    if (segments.some((segment) => segment === ".." || segment === ".")) {
+      throw new Error("object key must not contain path navigation segments");
+    }
     const resolved = path.resolve(this.dataDirectory, objectKey);
     const relative = path.relative(this.dataDirectory, resolved);
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
