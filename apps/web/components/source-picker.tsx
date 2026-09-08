@@ -30,7 +30,9 @@ function youTubeError(code: string): string {
 export function SourcePicker() {
   const router = useRouter();
   const [tab, setTab] = useState<SourceTab>("upload");
-  const [separationMode, setSeparationMode] = useState<SeparationMode>("vocals_instrumental");
+  // full_stems is not offered yet (see the Separation Mode section below);
+  // this constant keeps the request payload explicit and mode-typed.
+  const separationMode: SeparationMode = "vocals_instrumental";
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("mp3");
   const [error, setError] = useState<string | null>(null);
 
@@ -174,13 +176,13 @@ export function SourcePicker() {
       <div className="mt-8 flex flex-col items-center">
         <span className="mb-3 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Separation Mode</span>
         <div className="flex items-center gap-1 rounded-xl border border-zinc-800/90 bg-[#121215] p-1">
-          <OptionButton active={separationMode === "vocals_instrumental"} onClick={() => setSeparationMode("vocals_instrumental")}>
+          <OptionButton active onClick={() => {}}>
             Vocals &amp; Instrumental <span className="font-normal text-zinc-600">(2-stem)</span>
           </OptionButton>
-          <OptionButton active={separationMode === "full_stems"} onClick={() => setSeparationMode("full_stems")}>
-            Full Split <span className="font-normal text-zinc-400">(4-stem)</span>
-          </OptionButton>
+          {/* full_stems stays hidden until the model profile enables it
+              (plan Sections 4.3/18: gated on the listening-quality pass). */}
         </div>
+        <span className="mt-2 text-[11px] text-zinc-600">Full 4-stem split is coming soon.</span>
       </div>
 
       <label className="mt-5 flex items-center gap-3 text-xs text-zinc-400">

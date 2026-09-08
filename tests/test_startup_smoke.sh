@@ -78,10 +78,33 @@ check "creates the data root" "ok" "$r"
   cd "$work"
   cp "$OLDPWD/start.sh" start.sh
   sed -i 's/^npm run dev.*$/echo DEV_SERVER_PLACEHOLDER/; s/^wait "\$WEB_PID"$//' start.sh
-  out="$(STEMIFY_SKIP_PREFLIGHT=1 timeout 20 bash start.sh 2>&1)"
+  out="$(STEMIFY_SKIP_PREFLIGHT=1 STEMIFY_SKIP_MODEL_DOWNLOAD=1 timeout 20 bash start.sh 2>&1)"
   echo "$out" | grep -q "Stemify dev server" && r=ok || r=bad
 )
 check "skip-preflight path reaches the startup banner" "${r:-bad}" "ok"
+
+# ---------------------------------------------------------------------------
+# 3b. Model checkpoint pre-download step (plan 14.3): skipped under the test
+# escape hatch, and a no-op when the checkpoint file is already complete.
+# ---------------------------------------------------------------------------
+(
+  cd "$work"
+  cp "$OLDPWD/start.sh" start.sh
+  sed -i 's/^npm run dev.*$/echo DEV_SERVER_PLACEHOLDER/; s/^wait "\$WEB_PID"$//' start.sh
+  out="$(STEMIFY_SKIP_PREFLIGHT=1 STEMIFY_SKIP_MODEL_DOWNLOAD=1 timeout 20 bash start.sh 2>&1)"
+  echo "$out" | grep -q "Downloading the separation model" && r=bad || r=ok
+  check "model download skipped under STEMIFY_SKIP_MODEL_DOWNLOAD" "${r:-bad}" "ok"
+)
+(
+  cd "$work"
+  cp "$OLDPWD/start.sh" start.sh
+  sed -i 's/^npm run dev.*$/echo DEV_SERVER_PLACEHOLDER/; s/^wait "\$WEB_PID"$//' start.sh
+  mkdir -p data/models/hub/checkpoints
+  head -c 84141911 /dev/zero > data/models/hub/checkpoints/955717e8-8726e21a.th
+  out="$(STEMIFY_SKIP_PREFLIGHT=1 STEMIFY_SKIP_MODEL_DOWNLOAD=0 timeout 20 bash start.sh 2>&1)"
+  echo "$out" | grep -q "Downloading the separation model" && r=bad || r=ok
+  check "complete checkpoint is not re-downloaded" "${r:-bad}" "ok"
+)
 
 # ---------------------------------------------------------------------------
 # 4. Clean tree: no process is left behind after the script exits.

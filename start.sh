@@ -34,6 +34,8 @@ fi
 # Normalize STEMIFY_DATA_DIR to an absolute path: the web process runs with
 # apps/web as cwd and the worker with worker/, so a relative value would
 # resolve to a different directory per process and the app would be split.
+# Default matches the code fallback (./data) when neither .env nor env sets it.
+: "${STEMIFY_DATA_DIR:=./data}"
 case "$STEMIFY_DATA_DIR" in
   /*|?[A-Za-z]:*) ;; # already absolute (POSIX or drive form)
   *) STEMIFY_DATA_DIR="$(pwd)/${STEMIFY_DATA_DIR#./}" ;;
@@ -126,6 +128,43 @@ fi
 
 # Create the local data directories (plan Section 9.1 step 5).
 mkdir -p data/sources data/results data/models
+
+# Ensure the separation-model checkpoint is present before any job needs it:
+# a first-run job would otherwise die at MODEL_LOAD_FAILED while torch.hub
+# attempts its own invisible, non-resumable download. This fetch is visible,
+# resumable (-C -), and a no-op once the file is complete. The worker still
+# verifies the checkpoint hash on every load, so a truncated file can never
+# be trusted; it only costs a re-download.
+# Size = Content-Length of the pinned htdemucs checkpoint (plan Section 14.3).
+ensure_model_checkpoint() {
+  # CI/startup smoke tests set this: they run start.sh in sandboxes where a
+  # real 84MB download would be wasted work or a timeout.
+  [ "${STEMIFY_SKIP_MODEL_DOWNLOAD:-0}" = "1" ] && return 0
+  local checkpoint_file="data/models/hub/checkpoints/955717e8-8726e21a.th"
+  local checkpoint_url="https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th"
+  local expected_size=84141911
+  local actual
+  actual="$(wc -c < "$checkpoint_file" 2>/dev/null || echo 0)"
+  [ "$actual" -ge "$expected_size" ] && return 0
+  # Engine not installed -> nothing to pre-warm; jobs fail with the setup
+  # message either way (health check already told the user what to install).
+  if ! "${STEMIFY_PYTHON_BIN}" ${STEMIFY_PYTHON_ARGS} -c "import torch, demucs" >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "NOTE: curl not found; the worker will fetch the model during the first job."
+    return 0
+  fi
+  echo "Downloading the separation model (one-time, ~84MB; resumes if interrupted)..."
+  if curl -fL -C - --retry 3 --retry-delay 2 --connect-timeout 15 \
+      -o "$checkpoint_file" "$checkpoint_url"; then
+    echo "Model checkpoint ready."
+  else
+    echo "WARNING: model download did not finish. Start Stemify again to resume," >&2
+    echo "or let the worker retry during the first job." >&2
+  fi
+}
+ensure_model_checkpoint
 
 echo "Stemify dev server: http://localhost:3000 (Ctrl+C to stop)"
 
