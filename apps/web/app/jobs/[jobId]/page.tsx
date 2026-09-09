@@ -4,9 +4,11 @@
  * Job page (plan §8.3–§8.5): progress stages, refresh-safe recovery via the
  * URL, failure states with retry, and the completed stem list. Stage text
  * changes are announced via aria-live; layout reserves space to avoid shift.
+ * Completed jobs (roadmap A3): tick stems to include in a custom ZIP.
  */
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
 
 import { useJobPolling } from "@/hooks/use-job-polling";
 
@@ -102,69 +104,16 @@ export default function JobPage() {
 
   if (job.status === "completed") {
     return (
-      <main className="mx-auto flex w-full max-w-2xl flex-grow flex-col items-center gap-6 px-4 py-10 text-center">
-        <div className="space-y-3">
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-purple-400">
-            Separation complete
-          </p>
-          <h1 className="text-3xl font-extrabold text-white">Your stems are ready</h1>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-center gap-2">
-          <span className="max-w-full truncate rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-300">
-            {job.source.filename}
-          </span>
-          <span className="rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-400">
-            {job.mode === "full_stems" ? "Full split" : "Vocals & instrumental"}
-          </span>
-        </div>
-
-        <a
-          href={`${job.downloadUrl ?? `/api/jobs/${job.jobId}/downloads`}?kind=zip`}
-          className="purple-gradient-btn rounded-full px-8 py-3 text-sm font-semibold text-white"
-          download
-        >
-          Download all (ZIP)
-        </a>
-
-        <ul className="w-full space-y-3 text-left">
-          {(job.stems ?? []).map((stem) => (
-            <li
-              key={stem.id}
-              className="rounded-2xl border border-zinc-800 bg-[#131317] px-5 py-4 transition hover:border-purple-500/40"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-zinc-100">{stem.label}</p>
-                  <p className="text-xs text-zinc-500">
-                    {stem.durationSeconds !== null
-                      ? `${Math.floor(stem.durationSeconds / 60)}:${String(Math.round(stem.durationSeconds % 60)).padStart(2, "0")}`
-                      : ""}
-                  </p>
-                </div>
-                <a
-                  href={`/api/jobs/${job.jobId}/downloads?kind=stem&stem=${stem.id}`}
-                  className="shrink-0 rounded-full border border-zinc-700 px-4 py-1.5 text-xs font-semibold text-zinc-200 transition hover:border-purple-400 hover:text-white"
-                  download
-                >
-                  Download
-                </a>
-              </div>
-              <audio
-                controls
-                preload="none"
-                src={`/api/jobs/${job.jobId}/downloads?kind=stem&stem=${stem.id}`}
-                className="mt-3 h-10 w-full"
-                aria-label={`Preview ${stem.label}`}
-              />
-            </li>
-          ))}
-        </ul>
-
-        <p className="text-xs text-zinc-600">
-          Files expire {job.expiresAt ? new Date(job.expiresAt).toLocaleString() : "soon"}.
-        </p>
-      </main>
+      /* key: a different job hydrating into this view resets the selection. */
+      <CompletedView
+        key={job.jobId}
+        jobId={job.jobId}
+        filename={job.source.filename}
+        mode={job.mode}
+        stems={job.stems ?? []}
+        defaultZipUrl={job.downloadUrl ?? `/api/jobs/${job.jobId}/downloads?kind=zip`}
+        expiresAt={job.expiresAt}
+      />
     );
   }
 
@@ -245,6 +194,126 @@ export default function JobPage() {
 
       <p className="text-xs text-zinc-600">
         You can leave this page — the job keeps running. Bookmark this link to come back.
+      </p>
+    </main>
+  );
+}
+
+function CompletedView({
+  jobId,
+  filename,
+  mode,
+  stems,
+  defaultZipUrl,
+  expiresAt,
+}: {
+  jobId: string;
+  filename: string | null;
+  mode: string;
+  stems: { id: string; label: string; durationSeconds: number | null }[];
+  defaultZipUrl: string;
+  expiresAt?: string;
+}) {
+  // Selection state: every stem starts selected. In 2-stem mode the ZIP has
+  // exactly vocals + instrumental, so per-stem ticks add nothing; selection
+  // controls only show for multi-stem (full split) jobs.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(stems.map((stem) => stem.id)));
+
+  const allSelected = selected.size === stems.length;
+  const customZipUrl =
+    stems.length > 0 && !allSelected
+      ? `/api/jobs/${jobId}/downloads?kind=zip&stems=${Array.from(selected).join(",")}`
+      : defaultZipUrl;
+
+  return (
+    <main className="mx-auto flex w-full max-w-2xl flex-grow flex-col items-center gap-6 px-4 py-10 text-center">
+      <div className="space-y-3">
+        <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-purple-400">
+          Separation complete
+        </p>
+        <h1 className="text-3xl font-extrabold text-white">Your stems are ready</h1>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <span className="max-w-full truncate rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-300">
+          {filename}
+        </span>
+        <span className="rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-400">
+          {mode === "full_stems" ? "Full split" : "Vocals & instrumental"}
+        </span>
+      </div>
+
+      <a
+        href={customZipUrl}
+        className="purple-gradient-btn rounded-full px-8 py-3 text-sm font-semibold text-white"
+        download
+      >
+        {allSelected ? "Download all (ZIP)" : `Download ${selected.size} of ${stems.length} (ZIP)`}
+      </a>
+
+      <ul className="w-full space-y-3 text-left">
+        {stems.map((stem) => {
+          const isSelected = selected.has(stem.id);
+          return (
+            <li
+              key={stem.id}
+              className={`rounded-2xl border px-5 py-4 transition ${
+                isSelected
+                  ? "border-zinc-800 bg-[#131317] hover:border-purple-500/40"
+                  : "border-zinc-800/60 bg-[#0f0f12] opacity-70 hover:opacity-90"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <label className="flex min-w-0 items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={(event) =>
+                        setSelected((previous) => {
+                          const next = new Set(previous);
+                          if (event.target.checked) next.add(stem.id);
+                          else next.delete(stem.id);
+                          return next;
+                        })
+                      }
+                      aria-label={`Include ${stem.label} in the ZIP`}
+                      className="size-4 shrink-0 accent-purple-500"
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold text-zinc-100">
+                        {stem.label}
+                      </span>
+                      <span className="block text-xs text-zinc-500">
+                        {stem.durationSeconds !== null
+                          ? `${Math.floor(stem.durationSeconds / 60)}:${String(Math.round(stem.durationSeconds % 60)).padStart(2, "0")}`
+                          : ""}
+                      </span>
+                    </span>
+                  </label>
+                </div>
+                <a
+                  href={`/api/jobs/${jobId}/downloads?kind=stem&stem=${stem.id}`}
+                  className="shrink-0 rounded-full border border-zinc-700 px-4 py-1.5 text-xs font-semibold text-zinc-200 transition hover:border-purple-400 hover:text-white"
+                  download
+                >
+                  Download
+                </a>
+              </div>
+              <audio
+                controls
+                preload="none"
+                src={`/api/jobs/${jobId}/downloads?kind=stem&stem=${stem.id}`}
+                className="mt-3 h-10 w-full"
+                aria-label={`Preview ${stem.label}`}
+              />
+            </li>
+          );
+        })}
+      </ul>
+
+      <p className="text-xs text-zinc-600">
+        Files expire {expiresAt ? new Date(expiresAt).toLocaleString() : "soon"}.
       </p>
     </main>
   );
