@@ -55,8 +55,12 @@ def run_separation_stage(
     profile: ModelProfile | None = None,
     progress_callback: Any = None,
     cancellation_checker: Any = None,
-) -> dict[str, Any]:
-    """Separate the canonical waveform into named numpy stems (plan 12.5)."""
+) -> tuple[dict[str, Any], Any]:
+    """Separate the canonical waveform into named numpy stems (plan 12.5).
+
+    Returns (stems, mixture): the mixture is kept for the analysis stage
+    (roadmap Phase C), which needs the full waveform for key detection.
+    """
     from worker.input_audio import decode_to_waveform
 
     waveform, _probe = decode_to_waveform(canonical_wav)
@@ -69,10 +73,10 @@ def run_separation_stage(
         progress_callback=None,
         cancellation_checker=cancellation_checker,
     )
-    del waveform
+    mixture = waveform
     if progress_callback:
         progress_callback(Stage.SEPARATING, 75)
-    return stems
+    return stems, mixture
 
 
 def encode_stems_stage(
@@ -113,6 +117,28 @@ def encode_stems_stage(
     return encoded
 
 
+def analyze_stage(
+    stems: dict[str, Any],
+    mixture: Any,
+    sample_rate: int = 44100,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """BPM + key analysis (roadmap Phase C). Never raises; degrades to None."""
+    from worker.analysis import analyze_track
+
+    result = analyze_track(
+        drums_stem=stems.get("drums"),
+        mixture=mixture,
+        sample_rate=sample_rate,
+    )
+    analysis = result.analysis
+    return (
+        {"bpm": analysis.bpm, "key": analysis.key, "camelot": analysis.camelot}
+        if analysis is not None
+        else None,
+        result.degraded,
+    )
+
+
 def package_stage(
     job_id: str,
     encoded_stems: list[dict[str, Any]],
@@ -125,6 +151,7 @@ def package_stage(
     source_channels: int,
     profile: ModelProfile,
     expires_at_ms: int | None,
+    analysis: dict[str, Any] | None = None,
     progress_callback: Any = None,
 ) -> StageResult:
     """Build the manifest and ZIP from validated encoded stems (plan 12.7)."""
@@ -152,6 +179,7 @@ def package_stage(
         model_revision=profile.revision,
         mixture_consistency=profile.instrumental_policy == "mixture_minus_vocals"
         and mode == "vocals_instrumental",
+        analysis=analysis,
     )
     write_manifest(manifest, job_dir / "outputs" / "manifest.json")
 
@@ -204,6 +232,7 @@ __all__ = [
     "OutputError",
     "SeparationError",
     "StageResult",
+    "analyze_stage",
     "encode_stems_stage",
     "get_profile",
     "package_stage",

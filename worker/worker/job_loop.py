@@ -28,6 +28,7 @@ from worker.errors import ErrorCode
 from worker.input_audio import InputAudioError, JobTempDir, prepare_source
 from worker.models.base import SeparationError
 from worker.pipeline import (
+    analyze_stage,
     encode_stems_stage,
     package_stage,
     run_separation_stage,
@@ -155,7 +156,7 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
             queue.update_progress(job.id, Stage.PREPARING_AUDIO, 25)
             canonical_wav, probe = prepare_source(staged, job_dir)
 
-            stems = run_separation_stage(
+            stems, mixture = run_separation_stage(
                 canonical_wav,
                 job_dir,
                 job.mode,
@@ -170,8 +171,15 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                 job.output_format,
                 progress_callback=lambda stage, progress: queue.update_progress(job.id, stage, progress),
             )
-            del stems
             _raise_if_canceled(queue, job.id)
+
+            # Roadmap Phase C: BPM/key analysis on the separated audio. Best
+            # effort by contract — a failure here records the degradation and
+            # completes the job without an analysis block, never fails it.
+            analysis, degraded = analyze_stage(stems, mixture, sample_rate=44100)
+            del mixture, stems
+            if degraded:
+                queue.record_event(job.id, "analysis_degraded", degraded)
 
             from worker.models.profiles import get_profile_for_mode
 
@@ -194,6 +202,7 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                 source_channels=probe.channels,
                 profile=profile,
                 expires_at_ms=job.expires_at,
+                analysis=analysis,
                 progress_callback=lambda stage, progress: queue.update_progress(job.id, stage, progress),
             )
 

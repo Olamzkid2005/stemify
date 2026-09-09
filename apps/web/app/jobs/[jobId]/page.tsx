@@ -108,6 +108,7 @@ export default function JobPage() {
       <CompletedView
         key={job.jobId}
         jobId={job.jobId}
+        analysis={job.analysis}
         filename={job.source.filename}
         mode={job.mode}
         stems={job.stems ?? []}
@@ -206,6 +207,7 @@ function CompletedView({
   stems,
   defaultZipUrl,
   expiresAt,
+  analysis,
 }: {
   jobId: string;
   filename: string | null;
@@ -213,6 +215,7 @@ function CompletedView({
   stems: { id: string; label: string; durationSeconds: number | null }[];
   defaultZipUrl: string;
   expiresAt?: string;
+  analysis?: { bpm: number; key: string; camelot: string };
 }) {
   // Selection state: every stem starts selected. In 2-stem mode the ZIP has
   // exactly vocals + instrumental, so per-stem ticks add nothing; selection
@@ -241,6 +244,14 @@ function CompletedView({
         <span className="rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-400">
           {mode === "full_stems" ? "Full split" : "Vocals & instrumental"}
         </span>
+        {analysis ? (
+          <span
+            className="rounded-full border border-purple-500/40 bg-purple-950/30 px-4 py-1.5 text-xs font-medium text-purple-200"
+            title={`Detected ${Math.round(analysis.bpm)} BPM, key ${analysis.key} (Camelot ${analysis.camelot})`}
+          >
+            {Math.round(analysis.bpm)} BPM · {analysis.key} ({analysis.camelot})
+          </span>
+        ) : null}
       </div>
 
       <a

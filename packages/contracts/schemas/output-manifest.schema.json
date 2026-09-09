@@ -7,6 +7,16 @@
   "required": ["schemaVersion", "jobId", "source", "separation", "output"],
   "properties": {
     "schemaVersion": { "const": 1 },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bpm", "key", "camelot"],
+      "properties": {
+        "bpm": { "type": "number", "exclusiveMinimum": 0, "maximum": 400 },
+        "key": { "type": "string", "pattern": "^[A-G]#? (major|minor)$" },
+        "camelot": { "type": "string", "pattern": "^(1[0-2]|[1-9])[AB]$" }
+      }
+    },
     "jobId": { "type": "string", "pattern": "^job_[A-Za-z0-9]{16,64}$" },
     "source": {
       "type": "object",

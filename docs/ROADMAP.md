@@ -17,6 +17,11 @@ Decisions locked with the product owner on 2026-09-09:
   key profiles for key. If the DeepRhythm checkpoint/license proves
   restrictive at implementation time, fall back to librosa for both; the
   analyzer interface must make that a one-file swap.
+  **Implementation note (2026-09-09):** DeepRhythm is AGPL-3.0 (PyPI
+  classifiers), which triggered the pre-authorized fallback — Phase C shipped
+  with librosa for both BPM and key, and `worker/worker/analysis.py` is the
+  single swap point if a permissively licensed high-accuracy tempo estimator
+  appears later.
 
 Out of scope for both phases (still governed by `STEM_EXTRACTOR_PLAN.md` §3):
 cloud execution, real-time/latency-critical analysis, MIDI transcription,
@@ -160,10 +165,11 @@ Acceptance:
 
 ### C3. Accuracy validation on the main machine
 
-- Hand-verify against 5-10 tracks with known BPM/key ( Rekordbox or Mixed In
+- Hand-verify against 5-10 tracks with known BPM/key (Rekordbox or Mixed In
   Key as reference). Success bar: BPM within ±1 for steady-tempo tracks, key
-  correct ≥ 80%. Below bar → try the librosa fallback swap and re-measure;
-  only then consider heavier alternatives (a future decision, D3 revisited).
+  correct ≥ 80%. Below bar → revisit D3 with the accuracy/licensing table
+  (DeepRhythm AGPL, Essentia AGPL + no Windows wheels); a swap is confined to
+  `worker/worker/analysis.py` by design.
 
 ---
 

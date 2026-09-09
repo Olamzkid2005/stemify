@@ -26,3 +26,7 @@ psutil
 # Optional: YouTube input only (plan Task 14). The upload flow never needs
 # this; without it, YouTube jobs fail with DOWNLOAD_FAILED (fail safely).
 yt-dlp
+
+# Optional: BPM/key analysis only (roadmap Phase C). Without it, jobs complete
+# normally but the manifest carries no analysis block (graceful degradation).
+librosa>=0.10

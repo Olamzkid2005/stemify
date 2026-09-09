@@ -113,7 +113,7 @@ def command_separate(args: argparse.Namespace) -> int:
             canonical, probe = prepare_source(staged, job_dir)
             print(f"validated: {probe.duration_seconds:.1f}s, {probe.sample_rate} Hz, {probe.channels}ch")
 
-            stems = run_separation_stage(canonical, job_dir, args.mode, profile)
+            stems, _mixture = run_separation_stage(canonical, job_dir, args.mode, profile)
             print(f"separated: {', '.join(sorted(stems))}")
 
             encoded = encode_stems_stage(stems, job_dir, args.format)

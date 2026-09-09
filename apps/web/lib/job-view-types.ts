@@ -18,6 +18,9 @@ export type JobView = {
   stems?: { id: string; label: string; durationSeconds: number | null }[];
   downloadUrl?: string;
   expiresAt?: string;
+  // Roadmap Phase C: from the manifest inside the worker-built archive;
+  // absent when analysis was unavailable.
+  analysis?: { bpm: number; key: string; camelot: string };
   // failed only:
   errorCode?: string;
   errorMessage?: string | null;

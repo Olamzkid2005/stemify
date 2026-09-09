@@ -207,6 +207,17 @@ class JobQueue:
         )
         return cursor.rowcount == 1
 
+    def record_event(self, job_id: str, event_type: str, detail: str) -> None:
+        """Append a diagnostic job_event (plan Section 12.1); best-effort only."""
+        try:
+            self._connection.execute(
+                "INSERT INTO job_events (id, job_id, event_type, detail, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (f"evt_{_diagnostic_reference()}", job_id, event_type, detail, _now_ms()),
+            )
+        except Exception:  # noqa: BLE001 - events are diagnostic, never fatal
+            pass
+
     def fail_job(self, job_id: str, code: ErrorCode, message_public: str) -> None:
         """Move a queued/processing job to failed; terminal states never change."""
         now = _now_ms()

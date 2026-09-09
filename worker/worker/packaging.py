@@ -56,10 +56,12 @@ def build_manifest(
     model_id: str,
     model_revision: str,
     mixture_consistency: bool,
+    analysis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a manifest dict matching output-manifest.schema.json exactly.
 
     stems: [{"name": stem_key, "durationSeconds": float, "sha256": hex}, ...]
+    analysis: optional {"bpm", "key", "camelot"} (roadmap Phase C).
     """
     manifest: dict[str, Any] = {
         "schemaVersion": 1,
@@ -88,6 +90,8 @@ def build_manifest(
             ],
         },
     }
+    if analysis is not None:
+        manifest["analysis"] = analysis
     _validate_manifest(manifest)
     return manifest
 
@@ -225,3 +229,15 @@ def _validate_manifest_minimally(manifest: dict[str, Any]) -> None:
             raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, f"manifest stem {stem.get('name')!r} duration invalid")
         if not re.fullmatch(r"[a-f0-9]{64}", str(stem.get("sha256", ""))):
             raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, f"manifest stem {stem.get('name')!r} sha256 invalid")
+    analysis = manifest.get("analysis")
+    if analysis is not None:
+        if not isinstance(analysis, dict) or set(analysis) != {"bpm", "key", "camelot"}:
+            raise OutputError(
+                ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest analysis must contain exactly bpm, key, camelot"
+            )
+        if not (0 < float(analysis["bpm"]) <= 400):
+            raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest analysis.bpm invalid")
+        if not re.fullmatch(r"[A-G]#? (major|minor)", str(analysis["key"])):
+            raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest analysis.key invalid")
+        if not re.fullmatch(r"(1[0-2]|[1-9])([AB])", str(analysis["camelot"])):
+            raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest analysis.camelot invalid")
