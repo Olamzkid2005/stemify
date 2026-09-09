@@ -6,6 +6,8 @@ recorded checksum, and nothing is downloaded outside the configured cache.
 
 from __future__ import annotations
 
+import os
+
 from worker.errors import ErrorCode
 from worker.models.base import ModelProfile, SeparationError
 
@@ -35,7 +37,33 @@ DEFAULT_PROFILE = ModelProfile(
     license_reference="MIT (facebookresearch/demucs), model weights MIT",
 )
 
-MODEL_PROFILES: dict[str, ModelProfile] = {DEFAULT_PROFILE.profile_id: DEFAULT_PROFILE}
+# htdemucs_6s (demucs 4.0.1 experimental 6-source variant): same hybrid-transformer
+# family as the default profile, adding real piano and guitar sources. Served
+# from the same dl.fbaipublicfiles.com root and loaded through torch.hub with
+# check_hash=True (checkpoint identity: hybrid_transformer/5c90dfd2-34c22ccb.th,
+# from demucs 4.0.1's demucs/remote/files.txt).
+SIX_STEM_PROFILE = ModelProfile(
+    profile_id="demucs_6s",
+    model_id="htdemucs_6s",
+    checkpoint_checksum="34c22ccb",
+    checkpoint_identifier="hybrid_transformer/5c90dfd2-34c22ccb.th",
+    revision="demucs==4.0.1",
+    sample_rate=44100,
+    channels=2,
+    model_stems=("drums", "bass", "other", "vocals", "guitar", "piano"),
+    supported_modes=("vocals_instrumental", "full_stems"),
+    instrumental_policy="mixture_minus_vocals",
+    device_policy="auto",
+    chunk_length_seconds=None,  # model default segment
+    overlap=0.25,
+    precision="float32",
+    license_reference="MIT (facebookresearch/demucs), model weights MIT",
+)
+
+MODEL_PROFILES: dict[str, ModelProfile] = {
+    DEFAULT_PROFILE.profile_id: DEFAULT_PROFILE,
+    SIX_STEM_PROFILE.profile_id: SIX_STEM_PROFILE,
+}
 
 _VALID_MODES = frozenset({"vocals_instrumental", "full_stems"})
 _VALID_DEVICES = frozenset({"auto", "cpu", "cuda"})
@@ -63,6 +91,27 @@ def get_profile(profile_id: str) -> ModelProfile:
             f"unknown model profile {profile_id!r}; expected one of {sorted(MODEL_PROFILES)}",
         )
     return profile
+
+
+def get_profile_for_mode(mode: str) -> ModelProfile:
+    """Return the allowlisted profile that serves the requested mode.
+
+    STEMIFY_MODEL_PROFILE stays an explicit override: when the selected profile
+    supports the mode it is used. Otherwise the first allowlisted profile (in
+    registration order: default 4-stem first, then the 6-stem model) that
+    supports the mode is chosen, so full_stems jobs resolve to the 6-stem
+    profile without any per-job configuration.
+    """
+    selected = get_profile(os.environ.get("STEMIFY_MODEL_PROFILE", DEFAULT_PROFILE_ID))
+    if mode in selected.supported_modes:
+        return selected
+    for profile in MODEL_PROFILES.values():
+        if mode in profile.supported_modes:
+            return profile
+    raise SeparationError(
+        ErrorCode.MODEL_LOAD_FAILED,
+        f"no allowlisted profile supports mode {mode!r}",
+    )
 
 
 def _check_invariants(profile: ModelProfile) -> None:

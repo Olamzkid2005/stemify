@@ -44,6 +44,22 @@ def test_unknown_profile_is_rejected() -> None:
     assert excinfo.value.code == ErrorCode.MODEL_LOAD_FAILED
 
 
+def test_mode_resolves_profile_and_env_override_wins() -> None:
+    """full_stems resolves to the 6-stem profile; an explicit STEMIFY_MODEL_PROFILE
+    that supports the mode still wins; default mode keeps the 4-stem profile."""
+    from worker.models.profiles import get_profile_for_mode
+
+    assert get_profile_for_mode("full_stems").profile_id == "demucs_6s"
+    assert get_profile_for_mode("vocals_instrumental").profile_id == "demucs_default"
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv("STEMIFY_MODEL_PROFILE", "demucs_6s")
+        assert get_profile_for_mode("vocals_instrumental").profile_id == "demucs_6s"
+    finally:
+        monkeypatch.undo()
+
+
 def test_tampered_profile_fails_validation() -> None:
     profile = get_profile(DEFAULT_PROFILE_ID)
     tampered = ModelProfile(**{**profile.__dict__, "checkpoint_checksum": "deadbeef"})

@@ -96,7 +96,7 @@ def test_manifest_rejects_bad_job_id() -> None:
 
 def test_manifest_rejects_unknown_stem_name() -> None:
     stems = _stems()
-    stems[0]["name"] = "guitar"
+    stems[0]["name"] = "cowbell"
     with pytest.raises(OutputError) as excinfo:
         build_manifest(
             job_id=JOB_ID,

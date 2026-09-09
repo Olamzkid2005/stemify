@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from worker.errors import ErrorCode
 from worker.models.base import ModelProfile, SeparationError
-from worker.models.profiles import get_profile, validate_profile
+from worker.models.profiles import get_profile, get_profile_for_mode, validate_profile
 
 if TYPE_CHECKING:  # pragma: no cover
     import numpy as np
@@ -145,7 +145,7 @@ def separate(
     cancellation_checker: CancellationChecker | None = None,
 ) -> dict[str, np.ndarray]:
     """Separate a canonical stereo waveform into named numpy stems (plan 12.5)."""
-    profile = profile or get_profile(os.environ.get("STEMIFY_MODEL_PROFILE", "demucs_default"))
+    profile = profile or get_profile_for_mode(mode)
     validate_profile(profile)
     if mode not in profile.supported_modes:
         raise SeparationError(

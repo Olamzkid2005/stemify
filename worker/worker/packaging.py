@@ -39,6 +39,8 @@ STEM_LABELS: dict[str, str] = {
     "drums": "Drums",
     "bass": "Bass",
     "other": "Other",
+    "guitar": "Guitar",
+    "piano": "Piano",
 }
 
 
@@ -213,9 +215,9 @@ def _validate_manifest_minimally(manifest: dict[str, Any]) -> None:
     if output.get("format") not in ("mp3", "wav", "flac", "ogg", "m4a"):
         raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest output.format invalid")
     stems = output.get("stems") or []
-    if not 1 <= len(stems) <= 4:
-        raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest stems must contain 1-4 entries")
-    allowed_stems = {"vocals", "instrumental", "drums", "bass", "other"}
+    if not 1 <= len(stems) <= 6:
+        raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest stems must contain 1-6 entries")
+    allowed_stems = {"vocals", "instrumental", "drums", "bass", "other", "guitar", "piano"}
     for stem in stems:
         if stem.get("name") not in allowed_stems:
             raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, f"manifest stem {stem.get('name')!r} invalid")

@@ -98,13 +98,13 @@ def command_separate(args: argparse.Namespace) -> int:
     from worker.encoding import OutputError
     from worker.input_audio import InputAudioError, JobTempDir, prepare_source
     from worker.models.base import SeparationError
-    from worker.models.profiles import get_profile
+    from worker.models.profiles import get_profile_for_mode
     from worker.pipeline import encode_stems_stage, package_stage, run_separation_stage
 
     source = Path(args.input).resolve()
     output_root = Path(args.output).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-    profile = get_profile(__import__("os").environ.get("STEMIFY_MODEL_PROFILE", "demucs_default"))
+    profile = get_profile_for_mode(args.mode)
 
     try:
         with JobTempDir() as job_dir:
@@ -168,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     separate = subparsers.add_parser("separate", help="one-shot separation of a local file")
     separate.add_argument("--input", required=True, help="path to a supported audio file")
-    separate.add_argument("--mode", default="vocals_instrumental", choices=["vocals_instrumental"])
+    separate.add_argument("--mode", default="vocals_instrumental", choices=["vocals_instrumental", "full_stems"])
     separate.add_argument("--format", default="mp3", choices=["mp3", "wav", "flac", "ogg", "m4a"])
     separate.add_argument("--output", required=True, help="directory for the generated stems")
     separate.set_defaults(func=command_separate)

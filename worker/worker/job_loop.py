@@ -173,9 +173,12 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
             del stems
             _raise_if_canceled(queue, job.id)
 
-            from worker.models.profiles import get_profile
+            from worker.models.profiles import get_profile_for_mode
 
-            profile = get_profile(os.environ.get("STEMIFY_MODEL_PROFILE", "demucs_default"))
+            # The packaging profile must match the one separation used, so the
+            # manifest records the right model for the job's mode (e.g. the
+            # 6-stem profile for full_stems).
+            profile = get_profile_for_mode(job.mode)
             packaged = package_stage(
                 job_id=job.id,
                 encoded_stems=encoded,
