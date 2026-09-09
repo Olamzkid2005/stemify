@@ -180,33 +180,52 @@ class JobQueue:
         ).fetchone()
         if row is None or "drum_breakdown" in (row[0] or ""):
             return
-        self._connection.executescript(
-            """
-            BEGIN IMMEDIATE;
-            ALTER TABLE jobs RENAME TO jobs_old;
-            """
-            + JOBS_TABLE_DDL
-            + """
-            INSERT INTO jobs (
-              id, access_token_hash, owner_key, source_type, source_filename,
-              source_object_key, source_path, source_url, source_duration_seconds,
-              source_size_bytes, source_sha256, mode, output_format, status, stage,
-              progress, cancel_requested, worker_call_id, idempotency_key_hash,
-              error_code, error_message_public, diagnostic_reference, created_at,
-              started_at, completed_at, expires_at, updated_at
+        # Rebuilding a table that other tables reference via foreign keys:
+        # modern SQLite rewrites the REFERENCES clauses in job_outputs to
+        # point at jobs_old on ANY ALTER TABLE ... RENAME (even with FK
+        # enforcement off — verified empirically on sqlite 3.50), and the
+        # subsequent DROP leaves them dangling ("no such table:
+        # main.jobs_old" on every later insert). The documented opt-out is
+        # legacy_alter_table during the rename; FK enforcement also goes off
+        # for the rebuild, per the sqlite.org altertable procedure. Both are
+        # restored afterwards, and PRAGMA foreign_key_check verifies the
+        # rebuilt schema.
+        self._connection.execute("PRAGMA foreign_keys = OFF")
+        self._connection.execute("PRAGMA legacy_alter_table = ON")
+        try:
+            self._connection.executescript(
+                """
+                BEGIN IMMEDIATE;
+                ALTER TABLE jobs RENAME TO jobs_old;
+                """
+                + JOBS_TABLE_DDL
+                + """
+                INSERT INTO jobs (
+                  id, access_token_hash, owner_key, source_type, source_filename,
+                  source_object_key, source_path, source_url, source_duration_seconds,
+                  source_size_bytes, source_sha256, mode, output_format, status, stage,
+                  progress, cancel_requested, worker_call_id, idempotency_key_hash,
+                  error_code, error_message_public, diagnostic_reference, created_at,
+                  started_at, completed_at, expires_at, updated_at
+                )
+                SELECT
+                  id, access_token_hash, owner_key, source_type, source_filename,
+                  source_object_key, source_path, source_url, source_duration_seconds,
+                  source_size_bytes, source_sha256, mode, output_format, status, stage,
+                  progress, cancel_requested, worker_call_id, idempotency_key_hash,
+                  error_code, error_message_public, diagnostic_reference, created_at,
+                  started_at, completed_at, expires_at, updated_at
+                FROM jobs_old;
+                DROP TABLE jobs_old;
+                COMMIT;
+                """
             )
-            SELECT
-              id, access_token_hash, owner_key, source_type, source_filename,
-              source_object_key, source_path, source_url, source_duration_seconds,
-              source_size_bytes, source_sha256, mode, output_format, status, stage,
-              progress, cancel_requested, worker_call_id, idempotency_key_hash,
-              error_code, error_message_public, diagnostic_reference, created_at,
-              started_at, completed_at, expires_at, updated_at
-            FROM jobs_old;
-            DROP TABLE jobs_old;
-            COMMIT;
-            """
-        )
+        finally:
+            self._connection.execute("PRAGMA legacy_alter_table = OFF")
+            self._connection.execute("PRAGMA foreign_keys = ON")
+        violations = self._connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"foreign key violations after jobs rebuild: {violations!r}")
 
     def claim_next_queued_job(self) -> ClaimedJob | None:
         """Atomically move the oldest queued job to processing (plan Section 11.2)."""
@@ -265,7 +284,7 @@ class JobQueue:
                 "VALUES (?, ?, ?, ?, ?)",
                 (f"evt_{_diagnostic_reference()}", job_id, event_type, detail, _now_ms()),
             )
-        except Exception:  # noqa: BLE001 - events are diagnostic, never fatal
+        except Exception:  # noqa: BLE001, S110 - events are diagnostic, never fatal
             pass
 
     def fail_job(self, job_id: str, code: ErrorCode, message_public: str) -> None:

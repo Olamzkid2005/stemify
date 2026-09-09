@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 
 /**
  * Cleanup and retention tests (plan Task 13 / Section 19.3).
  * Uses a temporary data directory and the real local storage adapter.
+ *
+ * test-env must be imported FIRST: it points STEMIFY_DATA_DIR at a fresh
+ * temp directory before the @/lib modules (and the `db` singleton) load.
  */
+import "./test-env";
 import { db, closeDatabase } from "@/lib/db/client";
 import {
   deleteExpiredJobResults,
@@ -20,8 +22,7 @@ import {
 import { LocalStorage } from "@/lib/storage/local";
 import { __setStorageForTests } from "@/lib/storage";
 
-const DATA_DIR = mkdtempSync(path.join(os.tmpdir(), "stemify-cleanup-"));
-process.env.STEMIFY_DATA_DIR = DATA_DIR;
+const DATA_DIR = process.env.STEMIFY_DATA_DIR as string;
 
 const HOUR = 60 * 60 * 1000;
 const NOW = Date.now();

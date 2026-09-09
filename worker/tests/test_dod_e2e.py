@@ -64,7 +64,18 @@ def _sha256(path: Path) -> str:
 
 @pytest.fixture(scope="session")
 def shared_model_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """One model cache for the whole session so the 80MB checkpoint downloads once."""
+    """One model cache for the whole session so the 80MB checkpoint downloads once.
+
+    Reuses the app's on-disk checkpoint (data/models) when it is complete, so
+    offline or throttled machines never touch the network for these tests;
+    otherwise falls back to a session temp cache (the historical behavior).
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    app_checkpoint = (
+        repo_root / "data" / "models" / "hub" / "checkpoints" / "955717e8-8726e21a.th"
+    )
+    if app_checkpoint.is_file() and app_checkpoint.stat().st_size >= 84_141_911:
+        return repo_root / "data" / "models"
     return tmp_path_factory.mktemp("dod_models")
 
 

@@ -65,16 +65,17 @@ SIX_STEM_PROFILE = ModelProfile(
 # demucs remote index: the artifact is a single 49469ca8.th file (Google Drive,
 # per the project's own install script) loaded through demucs' local-repo API.
 # Code license: MIT (inagoy/drumsep). Checksum note: the artifact has no
-# publisher-published hash, so checkpoint_checksum is EMPTY until it is pinned
-# from a first verified download on the reference machine (the adapter prints
-# the sha256 it sees and refuses to load once a hash has been recorded).
-# Fetch on the reference machine:
-#   pip install gdown
-#   gdown 1-Dm666ScPkg8Gt2-lK3Ua0xOudWHZBGC -O data/models/drumsep/49469ca8.th
+# publisher-published hash, so checkpoint_checksum was EMPTY until pinned from
+# a first verified download on the reference machine (the adapter prints the
+# sha256 it sees and refuses to load once a hash has been recorded). Pinned
+# from the verified download on the reference machine (2026-09-09).
+# Fetch on a new machine:
+#   curl -L -C - -o data/models/drumsep/49469ca8.th \
+#     "https://drive.usercontent.google.com/download?id=1-Dm666ScPkg8Gt2-lK3Ua0xOudWHZBGC&export=download&confirm=t"
 DRUMSEP_PROFILE = ModelProfile(
     profile_id="drumsep",
     model_id="drumsep",
-    checkpoint_checksum="",
+    checkpoint_checksum="aefaa854",
     checkpoint_identifier="49469ca8.th",
     revision="inagoy/drumsep (2022)",
     sample_rate=44100,

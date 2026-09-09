@@ -11,7 +11,11 @@ import { after, before, describe, it } from "node:test";
  *
  * Uses the real SQLite database and a temp LocalStorage data directory; the
  * HTTP streaming layer lives in the route and only wraps these results.
+ *
+ * test-env must be imported FIRST: it points STEMIFY_DATA_DIR at a fresh
+ * temp directory before the @/lib modules (and the `db` singleton) load.
  */
+import "../lib/test-env";
 import { closeDatabase, db } from "@/lib/db/client";
 import {
   contentDispositionFilename,

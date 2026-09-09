@@ -4,13 +4,16 @@ import { after, before, describe, it } from "node:test";
 /**
  * Job creation integration tests for the local SQLite queue.
  * Uses the in-memory fake storage adapter and the local database file.
+ *
+ * test-env must be imported FIRST: it points STEMIFY_DATA_DIR at a fresh
+ * temp directory before the @/lib modules (and the `db` singleton) load.
  */
+import "./test-env";
 import { db, closeDatabase } from "@/lib/db/client";
 import { FakeStorage } from "@/lib/storage/fake";
 import { __setStorageForTests } from "@/lib/storage";
 import { createJob } from "@/lib/jobs";
 
-process.env.JOB_ACCESS_TOKEN_SECRET ??= "test-secret-for-local-tests-only";
 // These tests exercise idempotency/ownership, not the Task 13 active-job limit;
 // lift the limit so multiple jobs for one owner don't trip 429s here.
 process.env.MAX_ACTIVE_JOBS = "100";

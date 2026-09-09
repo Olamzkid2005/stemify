@@ -1,19 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { after, before, describe, it } from "node:test";
 
 /**
  * Worker liveness tests (plan Task 13 / Section 19.2): the heartbeat row the
  * worker writes, the web-side staleness check, and the job-view mapping.
+ *
+ * test-env must be imported FIRST: it points STEMIFY_DATA_DIR at a fresh
+ * temp directory before the @/lib modules (and the `db` singleton) load.
  */
+import "./test-env";
 import { db, closeDatabase } from "@/lib/db/client";
 import { workerStatus, WORKER_STALE_MS } from "@/lib/worker-status";
 import { getJobView } from "@/lib/job-view";
-
-const DATA_DIR = mkdtempSync(path.join(os.tmpdir(), "stemify-worker-status-"));
-process.env.STEMIFY_DATA_DIR = DATA_DIR;
 
 const OWNER = "gid_heartbeatowner0001";
 

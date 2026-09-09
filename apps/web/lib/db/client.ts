@@ -47,31 +47,51 @@ export class LocalDatabase {
       .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'")
       .get() as { sql?: string } | undefined;
     if (!row?.sql || row.sql.includes("drum_breakdown")) return;
-    this.connection.exec(
-      `
-      BEGIN IMMEDIATE;
-      ALTER TABLE jobs RENAME TO jobs_old;
-      ${JOBS_TABLE_DDL}
-      INSERT INTO jobs (
-        id, access_token_hash, owner_key, source_type, source_filename,
-        source_object_key, source_path, source_url, source_duration_seconds,
-        source_size_bytes, source_sha256, mode, output_format, status, stage,
-        progress, cancel_requested, worker_call_id, idempotency_key_hash,
-        error_code, error_message_public, diagnostic_reference, created_at,
-        started_at, completed_at, expires_at, updated_at
-      )
-      SELECT
-        id, access_token_hash, owner_key, source_type, source_filename,
-        source_object_key, source_path, source_url, source_duration_seconds,
-        source_size_bytes, source_sha256, mode, output_format, status, stage,
-        progress, cancel_requested, worker_call_id, idempotency_key_hash,
-        error_code, error_message_public, diagnostic_reference, created_at,
-        started_at, completed_at, expires_at, updated_at
-      FROM jobs_old;
-      DROP TABLE jobs_old;
-      COMMIT;
-      `,
-    );
+    // Rebuilding a table that other tables reference via foreign keys:
+    // modern SQLite rewrites the REFERENCES clauses in job_outputs to point
+    // at jobs_old on ANY ALTER TABLE ... RENAME (even with FK enforcement
+    // off — verified empirically on sqlite 3.50), and the subsequent DROP
+    // leaves them dangling ("no such table: main.jobs_old" on every later
+    // insert). The documented opt-out is legacy_alter_table during the
+    // rename; FK enforcement also goes off for the rebuild, per the
+    // sqlite.org altertable procedure. Both are restored afterwards, and
+    // PRAGMA foreign_key_check verifies the rebuilt schema.
+    this.connection.exec("PRAGMA foreign_keys = OFF");
+    this.connection.exec("PRAGMA legacy_alter_table = ON");
+    try {
+      this.connection.exec(
+        `
+        BEGIN IMMEDIATE;
+        ALTER TABLE jobs RENAME TO jobs_old;
+        ${JOBS_TABLE_DDL}
+        INSERT INTO jobs (
+          id, access_token_hash, owner_key, source_type, source_filename,
+          source_object_key, source_path, source_url, source_duration_seconds,
+          source_size_bytes, source_sha256, mode, output_format, status, stage,
+          progress, cancel_requested, worker_call_id, idempotency_key_hash,
+          error_code, error_message_public, diagnostic_reference, created_at,
+          started_at, completed_at, expires_at, updated_at
+        )
+        SELECT
+          id, access_token_hash, owner_key, source_type, source_filename,
+          source_object_key, source_path, source_url, source_duration_seconds,
+          source_size_bytes, source_sha256, mode, output_format, status, stage,
+          progress, cancel_requested, worker_call_id, idempotency_key_hash,
+          error_code, error_message_public, diagnostic_reference, created_at,
+          started_at, completed_at, expires_at, updated_at
+        FROM jobs_old;
+        DROP TABLE jobs_old;
+        COMMIT;
+        `,
+      );
+    } finally {
+      this.connection.exec("PRAGMA legacy_alter_table = OFF");
+      this.connection.exec("PRAGMA foreign_keys = ON");
+    }
+    const violations = this.connection.prepare("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) {
+      throw new Error(`foreign key violations after jobs rebuild: ${JSON.stringify(violations)}`);
+    }
   }
 
   exec(sql: string): void {

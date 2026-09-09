@@ -124,7 +124,12 @@ def separate(
     demucs_pretrained = _import_demucs_pretrained()
     try:
         with _weights_only_compat():
-            model = demucs_pretrained.get_model(profile.model_id, repo=repo)
+            # Upstream (inagoy/drumsep's own script) loads the model by the
+            # CHECKPOINT FILE STEM ("demucs --repo model -n 49469ca8"), not by
+            # a bag name — demucs' LocalRepo indexes .th files by stem, and no
+            # drumsep.yaml exists. model_id ("drumsep") stays as the manifest
+            # label; the repo lookup must use the signature.
+            model = demucs_pretrained.get_model(checkpoint.stem, repo=repo)
         model.to(resolved)
         model.eval()
     except SeparationError:

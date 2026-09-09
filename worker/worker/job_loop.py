@@ -23,10 +23,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from worker.database import ClaimedJob, JobQueue
-from worker.input_audio import MAX_FILE_BYTES
 from worker.encoding import OutputError
 from worker.errors import ErrorCode
-from worker.input_audio import InputAudioError, JobTempDir, prepare_source
+from worker.input_audio import MAX_FILE_BYTES, InputAudioError, JobTempDir, prepare_source
 from worker.models.base import SeparationError
 from worker.pipeline import (
     analyze_stage,

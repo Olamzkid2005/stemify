@@ -4,13 +4,15 @@ import { after, before, describe, it } from "node:test";
 /**
  * Active-job limit tests (plan Task 13 / Section 15: MAX_ACTIVE_JOBS).
  * Uses the in-memory fake storage adapter and the shared local database.
+ *
+ * test-env must be imported FIRST: it points STEMIFY_DATA_DIR at a fresh
+ * temp directory before the @/lib modules (and the `db` singleton) load.
  */
+import "./test-env";
 import { db, closeDatabase } from "@/lib/db/client";
 import { FakeStorage } from "@/lib/storage/fake";
 import { __setStorageForTests } from "@/lib/storage";
 import { createJob } from "@/lib/jobs";
-
-process.env.JOB_ACCESS_TOKEN_SECRET ??= "test-secret-for-local-tests-only";
 
 const OWNER = "gid_limitowner0000000001";
 

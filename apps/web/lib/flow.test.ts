@@ -12,7 +12,11 @@ import { after, before, describe, it } from "node:test";
  * a completed job's stems and ZIP resolve for download, a deleted result file
  * and an expired job surface as gone (410), and the cleanup pass removes
  * expired artifacts without touching live ones.
+ *
+ * test-env must be imported FIRST: it points STEMIFY_DATA_DIR at a fresh
+ * temp directory before the @/lib modules (and the `db` singleton) load.
  */
+import "../lib/test-env";
 import { closeDatabase, db } from "@/lib/db/client";
 import { createJob } from "@/lib/jobs";
 import { runCleanup } from "@/lib/cleanup";
@@ -21,7 +25,6 @@ import { getJobView } from "@/lib/job-view";
 import { LocalStorage } from "@/lib/storage/local";
 import { __setStorageForTests } from "@/lib/storage";
 
-process.env.JOB_ACCESS_TOKEN_SECRET ??= "test-secret-for-local-tests-only";
 process.env.MAX_ACTIVE_JOBS = "100";
 
 const OWNER = "gid_flowowner000000001";

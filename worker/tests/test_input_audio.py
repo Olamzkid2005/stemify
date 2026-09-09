@@ -137,9 +137,10 @@ def test_oversize_file_is_limit_exceeded(tmp_path: Path, monkeypatch: pytest.Mon
     make_audio(src, 0.5)
     import worker.input_audio as mod
 
-    monkeypatch.setattr(mod, "MAX_FILE_BYTES", 10)
+    # The size limit is parameterized now (validate_source(path, max_file_bytes)),
+    # so pass the tiny limit directly instead of monkeypatching the module global.
     with pytest.raises(InputAudioError) as excinfo:
-        mod.validate_source(src)
+        mod.validate_source(src, max_file_bytes=10)
     assert excinfo.value.code == ErrorCode.LIMIT_EXCEEDED
 
 

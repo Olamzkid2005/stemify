@@ -65,16 +65,16 @@ def test_mode_resolves_profile_and_env_override_wins() -> None:
 def test_drumsep_profile_invariants() -> None:
     """Roadmap Phase B: the drumsep profile is allowlisted and structurally sane.
 
-    The checkpoint checksum is deliberately empty until it is pinned from a
-    verified download on the reference machine; the loader refuses to run with
-    an unpinned hash only after the first load surfaces it (see drumsep.py).
+    The checkpoint checksum was pinned from the first verified download on the
+    reference machine (sha256 prefix aefaa854...); the loader now verifies it
+    on every load, so a truncated or tampered artifact is rejected.
     """
     from worker.models.profiles import DRUMSEP_PROFILE, validate_profile
 
     validate_profile(DRUMSEP_PROFILE)  # does not raise
     assert DRUMSEP_PROFILE.model_stems == ("drums_kick", "drums_snare", "drums_cymbals", "drums_toms")
     assert DRUMSEP_PROFILE.supported_modes == ("drum_breakdown",)
-    assert DRUMSEP_PROFILE.checkpoint_checksum == ""  # pinned on the reference machine
+    assert DRUMSEP_PROFILE.checkpoint_checksum == "aefaa854"
 
 
 def test_tampered_profile_fails_validation() -> None:
