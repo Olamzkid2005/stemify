@@ -41,6 +41,11 @@ STEM_LABELS: dict[str, str] = {
     "other": "Other",
     "guitar": "Guitar",
     "piano": "Piano",
+    # Drum subdivision (roadmap Phase B).
+    "drums_kick": "Kick",
+    "drums_snare": "Snare",
+    "drums_cymbals": "Cymbals",
+    "drums_toms": "Toms",
 }
 
 
@@ -210,7 +215,7 @@ def _validate_manifest_minimally(manifest: dict[str, Any]) -> None:
         raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest source.sampleRate invalid")
     if source.get("channels") not in (1, 2):
         raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest source.channels invalid")
-    if separation.get("mode") not in ("vocals_instrumental", "full_stems"):
+    if separation.get("mode") not in ("vocals_instrumental", "full_stems", "drum_breakdown"):
         raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest separation.mode invalid")
     if not separation.get("modelId") or not separation.get("modelRevision"):
         raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest model identity missing")
@@ -221,7 +226,20 @@ def _validate_manifest_minimally(manifest: dict[str, Any]) -> None:
     stems = output.get("stems") or []
     if not 1 <= len(stems) <= 6:
         raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest stems must contain 1-6 entries")
-    allowed_stems = {"vocals", "instrumental", "drums", "bass", "other", "guitar", "piano"}
+    allowed_stems = {
+        "vocals",
+        "instrumental",
+        "drums",
+        "bass",
+        "other",
+        "guitar",
+        "piano",
+        # Drum subdivision (roadmap Phase B).
+        "drums_kick",
+        "drums_snare",
+        "drums_cymbals",
+        "drums_toms",
+    }
     for stem in stems:
         if stem.get("name") not in allowed_stems:
             raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, f"manifest stem {stem.get('name')!r} invalid")

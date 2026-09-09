@@ -60,12 +60,42 @@ SIX_STEM_PROFILE = ModelProfile(
     license_reference="MIT (facebookresearch/demucs), model weights MIT",
 )
 
+# drumsep (inagoy/drumsep, 2022): a hybrid-demucs checkpoint trained to split a
+# DRUM RECORDING into kick / snare / cymbals / toms. It is not served from the
+# demucs remote index: the artifact is a single 49469ca8.th file (Google Drive,
+# per the project's own install script) loaded through demucs' local-repo API.
+# Code license: MIT (inagoy/drumsep). Checksum note: the artifact has no
+# publisher-published hash, so checkpoint_checksum is EMPTY until it is pinned
+# from a first verified download on the reference machine (the adapter prints
+# the sha256 it sees and refuses to load once a hash has been recorded).
+# Fetch on the reference machine:
+#   pip install gdown
+#   gdown 1-Dm666ScPkg8Gt2-lK3Ua0xOudWHZBGC -O data/models/drumsep/49469ca8.th
+DRUMSEP_PROFILE = ModelProfile(
+    profile_id="drumsep",
+    model_id="drumsep",
+    checkpoint_checksum="",
+    checkpoint_identifier="49469ca8.th",
+    revision="inagoy/drumsep (2022)",
+    sample_rate=44100,
+    channels=2,
+    model_stems=("drums_kick", "drums_snare", "drums_cymbals", "drums_toms"),
+    supported_modes=("drum_breakdown",),
+    instrumental_policy="direct_model_output",
+    device_policy="auto",
+    chunk_length_seconds=None,  # model default segment
+    overlap=0.25,
+    precision="float32",
+    license_reference="MIT (inagoy/drumsep), model weights by the drumsep authors",
+)
+
 MODEL_PROFILES: dict[str, ModelProfile] = {
     DEFAULT_PROFILE.profile_id: DEFAULT_PROFILE,
     SIX_STEM_PROFILE.profile_id: SIX_STEM_PROFILE,
+    DRUMSEP_PROFILE.profile_id: DRUMSEP_PROFILE,
 }
 
-_VALID_MODES = frozenset({"vocals_instrumental", "full_stems"})
+_VALID_MODES = frozenset({"vocals_instrumental", "full_stems", "drum_breakdown"})
 _VALID_DEVICES = frozenset({"auto", "cpu", "cuda"})
 _INSTRUMENTAL_POLICIES = frozenset({"mixture_minus_vocals", "direct_model_output"})
 
@@ -98,9 +128,8 @@ def get_profile_for_mode(mode: str) -> ModelProfile:
 
     STEMIFY_MODEL_PROFILE stays an explicit override: when the selected profile
     supports the mode it is used. Otherwise the first allowlisted profile (in
-    registration order: default 4-stem first, then the 6-stem model) that
-    supports the mode is chosen, so full_stems jobs resolve to the 6-stem
-    profile without any per-job configuration.
+    registration order) that supports the mode is chosen: vocals_instrumental
+    -> default 4-stem, full_stems -> 6-stem, drum_breakdown -> drumsep.
     """
     selected = get_profile(os.environ.get("STEMIFY_MODEL_PROFILE", DEFAULT_PROFILE_ID))
     if mode in selected.supported_modes:
@@ -118,7 +147,10 @@ def _check_invariants(profile: ModelProfile) -> None:
     """Structural sanity; the allowlist equality above is the real gate."""
     if profile.checkpoint_checksum.lower() != profile.checkpoint_checksum:
         raise SeparationError(ErrorCode.MODEL_LOAD_FAILED, "checkpoint checksum must be lowercase hex")
-    if not profile.model_stems or "vocals" not in profile.model_stems:
+    # Only whole-track modes must carry a vocals stem; the drum-subdivision
+    # profile operates on the drums stem and has no vocals output.
+    serves_whole_track = "vocals_instrumental" in profile.supported_modes or "full_stems" in profile.supported_modes
+    if serves_whole_track and (not profile.model_stems or "vocals" not in profile.model_stems):
         raise SeparationError(ErrorCode.MODEL_LOAD_FAILED, "profile must include a vocals stem")
     if not set(profile.supported_modes) <= _VALID_MODES:
         raise SeparationError(ErrorCode.MODEL_LOAD_FAILED, "unsupported separation mode in profile")

@@ -9,7 +9,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { SQLITE_SCHEMA } from "./schema";
+import { JOBS_TABLE_DDL, SQLITE_SCHEMA } from "./schema";
 
 const globalForDb = globalThis as unknown as {
   stemifyDatabase?: LocalDatabase;
@@ -30,7 +30,48 @@ export class LocalDatabase {
     mkdirSync(directory, { recursive: true });
     this.connection = new DatabaseSync(this.databasePath);
     this.connection.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+    // Migration must precede the schema script: the CREATE INDEX statements
+    // would otherwise attach to the old jobs table and be dropped with it
+    // during the rebuild (mirrors worker/worker/database.py).
+    this.migrateJobsModeCheck();
     this.connection.exec(SQLITE_SCHEMA);
+  }
+
+  /**
+   * Rebuild the jobs table if it still has the 2-value mode CHECK (SQLite
+   * cannot alter a CHECK, and CHECKs re-evaluate on every UPDATE). No-op when
+   * the column already accepts drum_breakdown.
+   */
+  private migrateJobsModeCheck(): void {
+    const row = this.connection
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'")
+      .get() as { sql?: string } | undefined;
+    if (!row?.sql || row.sql.includes("drum_breakdown")) return;
+    this.connection.exec(
+      `
+      BEGIN IMMEDIATE;
+      ALTER TABLE jobs RENAME TO jobs_old;
+      ${JOBS_TABLE_DDL}
+      INSERT INTO jobs (
+        id, access_token_hash, owner_key, source_type, source_filename,
+        source_object_key, source_path, source_url, source_duration_seconds,
+        source_size_bytes, source_sha256, mode, output_format, status, stage,
+        progress, cancel_requested, worker_call_id, idempotency_key_hash,
+        error_code, error_message_public, diagnostic_reference, created_at,
+        started_at, completed_at, expires_at, updated_at
+      )
+      SELECT
+        id, access_token_hash, owner_key, source_type, source_filename,
+        source_object_key, source_path, source_url, source_duration_seconds,
+        source_size_bytes, source_sha256, mode, output_format, status, stage,
+        progress, cancel_requested, worker_call_id, idempotency_key_hash,
+        error_code, error_message_public, diagnostic_reference, created_at,
+        started_at, completed_at, expires_at, updated_at
+      FROM jobs_old;
+      DROP TABLE jobs_old;
+      COMMIT;
+      `,
+    );
   }
 
   exec(sql: string): void {

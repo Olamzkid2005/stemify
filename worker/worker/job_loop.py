@@ -23,6 +23,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from worker.database import ClaimedJob, JobQueue
+from worker.input_audio import MAX_FILE_BYTES
 from worker.encoding import OutputError
 from worker.errors import ErrorCode
 from worker.input_audio import InputAudioError, JobTempDir, prepare_source
@@ -154,7 +155,16 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                     shutil.copy(source, staged)
 
             queue.update_progress(job.id, Stage.PREPARING_AUDIO, 25)
-            canonical_wav, probe = prepare_source(staged, job_dir)
+            # Refine jobs (roadmap Phase B) consume a worker-produced drum stem.
+            # A WAV drums stem legitimately exceeds the 100 MB upload cap
+            # (~4.7 min stereo), so the upload cap applies to user uploads
+            # only; the duration cap still guards everything.
+            refine_limit = (
+                1 << 30
+                if job.mode == "drum_breakdown"
+                else MAX_FILE_BYTES
+            )
+            canonical_wav, probe = prepare_source(staged, job_dir, max_file_bytes=refine_limit)
 
             stems, mixture = run_separation_stage(
                 canonical_wav,
@@ -176,10 +186,14 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
             # Roadmap Phase C: BPM/key analysis on the separated audio. Best
             # effort by contract — a failure here records the degradation and
             # completes the job without an analysis block, never fails it.
-            analysis, degraded = analyze_stage(stems, mixture, sample_rate=44100)
+            # Drum-subdivision jobs (Phase B) analyze a drums stem, not a song:
+            # BPM/key of drum parts is meaningless, so analysis is skipped.
+            analysis = None
+            if job.mode != "drum_breakdown":
+                analysis, degraded = analyze_stage(stems, mixture, sample_rate=44100)
+                if degraded:
+                    queue.record_event(job.id, "analysis_degraded", degraded)
             del mixture, stems
-            if degraded:
-                queue.record_event(job.id, "analysis_degraded", degraded)
 
             from worker.models.profiles import get_profile_for_mode
 

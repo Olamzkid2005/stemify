@@ -7,7 +7,7 @@
  * Completed jobs (roadmap A3): tick stems to include in a custom ZIP.
  */
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { useJobPolling } from "@/hooks/use-job-polling";
@@ -112,6 +112,7 @@ export default function JobPage() {
         filename={job.source.filename}
         mode={job.mode}
         stems={job.stems ?? []}
+        workerRunning={job.workerRunning}
         defaultZipUrl={job.downloadUrl ?? `/api/jobs/${job.jobId}/downloads?kind=zip`}
         expiresAt={job.expiresAt}
       />
@@ -205,6 +206,7 @@ function CompletedView({
   filename,
   mode,
   stems,
+  workerRunning,
   defaultZipUrl,
   expiresAt,
   analysis,
@@ -213,14 +215,34 @@ function CompletedView({
   filename: string | null;
   mode: string;
   stems: { id: string; label: string; durationSeconds: number | null }[];
+  workerRunning?: boolean;
   defaultZipUrl: string;
   expiresAt?: string;
   analysis?: { bpm: number; key: string; camelot: string };
 }) {
+  const router = useRouter();
+  const [refineState, setRefineState] = useState<"idle" | "starting" | "error">("idle");
+
+  async function refineDrums() {
+    setRefineState("starting");
+    try {
+      const response = await fetch(`/api/jobs/${jobId}/refine-drums`, { method: "POST" });
+      const body = (await response.json()) as { jobId?: string; statusUrl?: string; error?: string };
+      if (!response.ok || !body.jobId) {
+        setRefineState("error");
+        return;
+      }
+      router.push(body.statusUrl ?? `/jobs/${body.jobId}`);
+    } catch {
+      setRefineState("error");
+    }
+  }
   // Selection state: every stem starts selected. In 2-stem mode the ZIP has
   // exactly vocals + instrumental, so per-stem ticks add nothing; selection
   // controls only show for multi-stem (full split) jobs.
   const [selected, setSelected] = useState<Set<string>>(() => new Set(stems.map((stem) => stem.id)));
+  const isDrumBreakdown = mode === "drum_breakdown";
+  const hasDrumsStem = stems.some((stem) => stem.id === "drums");
 
   const allSelected = selected.size === stems.length;
   const customZipUrl =
@@ -242,7 +264,11 @@ function CompletedView({
           {filename}
         </span>
         <span className="rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-400">
-          {mode === "full_stems" ? "Full split" : "Vocals & instrumental"}
+          {mode === "full_stems"
+            ? "Full split"
+            : mode === "drum_breakdown"
+              ? "Drums refined"
+              : "Vocals & instrumental"}
         </span>
         {analysis ? (
           <span
@@ -261,6 +287,33 @@ function CompletedView({
       >
         {allSelected ? "Download all (ZIP)" : `Download ${selected.size} of ${stems.length} (ZIP)`}
       </a>
+
+      {/* Refine drums (roadmap Phase B): split the drums stem further into
+          kick/snare/cymbals/toms. Only for whole-track jobs with a drums stem,
+          while the worker is up and no other job is running. */}
+      {!isDrumBreakdown && hasDrumsStem ? (
+        <div className="flex flex-col items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => void refineDrums()}
+            disabled={refineState === "starting" || workerRunning === false}
+            className="rounded-full border border-purple-500/50 px-6 py-2 text-xs font-semibold text-purple-200 transition enabled:hover:border-purple-400 enabled:hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {refineState === "starting"
+              ? "Starting…"
+              : "Refine drums → Kick · Snare · Cymbals · Toms"}
+          </button>
+          {workerRunning === false ? (
+            <span className="text-[11px] text-amber-300/80">
+              Needs the local worker running
+            </span>
+          ) : refineState === "error" ? (
+            <span className="text-[11px] text-red-400">
+              Could not start the refine job. Try again.
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <ul className="w-full space-y-3 text-left">
         {stems.map((stem) => {

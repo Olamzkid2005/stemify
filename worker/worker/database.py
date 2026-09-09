@@ -19,20 +19,11 @@ from worker.errors import ErrorCode
 from worker.stages import Stage
 
 # Same DDL as apps/web/lib/db/schema.ts (SQLITE_SCHEMA). Kept in sync by
-# tests/test_contract_parity.py — update both sides in the same change.
-SQLITE_SCHEMA = """\
-CREATE TABLE IF NOT EXISTS uploads (
-  id TEXT PRIMARY KEY,
-  owner_key TEXT NOT NULL,
-  filename TEXT NOT NULL,
-  object_key TEXT NOT NULL UNIQUE,
-  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
-  created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
-  expires_at INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS uploads_owner_created_idx ON uploads(owner_key, created_at);
-
+# review — update both sides in the same change. Note: SQLite cannot alter a
+# CHECK constraint and constraints re-evaluate on every UPDATE, so both
+# clients rebuild the jobs table when it still carries the older 2-value mode
+# constraint (_migrate_jobs_mode_check below / apps/web/lib/db/client.ts).
+JOBS_TABLE_DDL = """\
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   access_token_hash TEXT,
@@ -45,7 +36,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   source_duration_seconds REAL,
   source_size_bytes INTEGER,
   source_sha256 TEXT,
-  mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems')),
+  mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems', 'drum_breakdown')),
   output_format TEXT NOT NULL CHECK (output_format IN ('mp3', 'wav', 'flac', 'ogg', 'm4a')),
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'canceled', 'expired')),
   stage TEXT,
@@ -63,6 +54,20 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
   UNIQUE (owner_key, idempotency_key_hash)
 );
+"""
+
+SQLITE_SCHEMA = JOBS_TABLE_DDL + """\
+CREATE TABLE IF NOT EXISTS uploads (
+  id TEXT PRIMARY KEY,
+  owner_key TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  object_key TEXT NOT NULL UNIQUE,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+  created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+  expires_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS uploads_owner_created_idx ON uploads(owner_key, created_at);
 
 CREATE TABLE IF NOT EXISTS job_outputs (
   id TEXT PRIMARY KEY,
@@ -153,10 +158,55 @@ class JobQueue:
         self._connection.execute("PRAGMA journal_mode = WAL")
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._connection.execute("PRAGMA busy_timeout = 5000")
+        # Migration must precede the schema script: the CREATE INDEX statements
+        # would otherwise attach to the old jobs table and be dropped with it
+        # during the rebuild.
+        self._migrate_jobs_mode_check()
         self._connection.executescript(SQLITE_SCHEMA)
 
     def close(self) -> None:
         self._connection.close()
+
+    def _migrate_jobs_mode_check(self) -> None:
+        """Rebuild the jobs table if it still has the 2-value mode CHECK.
+
+        SQLite cannot alter a CHECK constraint, and CHECKs re-evaluate on every
+        UPDATE — so a database created before drum_breakdown (roadmap Phase B)
+        would reject even unrelated updates to any jobs row. The rebuild is a
+        no-op when the column already accepts the new value.
+        """
+        row = self._connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
+        ).fetchone()
+        if row is None or "drum_breakdown" in (row[0] or ""):
+            return
+        self._connection.executescript(
+            """
+            BEGIN IMMEDIATE;
+            ALTER TABLE jobs RENAME TO jobs_old;
+            """
+            + JOBS_TABLE_DDL
+            + """
+            INSERT INTO jobs (
+              id, access_token_hash, owner_key, source_type, source_filename,
+              source_object_key, source_path, source_url, source_duration_seconds,
+              source_size_bytes, source_sha256, mode, output_format, status, stage,
+              progress, cancel_requested, worker_call_id, idempotency_key_hash,
+              error_code, error_message_public, diagnostic_reference, created_at,
+              started_at, completed_at, expires_at, updated_at
+            )
+            SELECT
+              id, access_token_hash, owner_key, source_type, source_filename,
+              source_object_key, source_path, source_url, source_duration_seconds,
+              source_size_bytes, source_sha256, mode, output_format, status, stage,
+              progress, cancel_requested, worker_call_id, idempotency_key_hash,
+              error_code, error_message_public, diagnostic_reference, created_at,
+              started_at, completed_at, expires_at, updated_at
+            FROM jobs_old;
+            DROP TABLE jobs_old;
+            COMMIT;
+            """
+        )
 
     def claim_next_queued_job(self) -> ClaimedJob | None:
         """Atomically move the oldest queued job to processing (plan Section 11.2)."""

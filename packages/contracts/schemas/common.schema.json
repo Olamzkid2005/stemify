@@ -7,7 +7,7 @@
       "enum": ["upload", "youtube"]
     },
     "separationMode": {
-      "enum": ["vocals_instrumental", "full_stems"]
+      "enum": ["vocals_instrumental", "full_stems", "drum_breakdown"]
     },
     "outputFormat": {
       "enum": ["mp3", "wav", "flac", "ogg", "m4a"]
@@ -36,7 +36,19 @@
       ]
     },
     "stemKey": {
-      "enum": ["vocals", "instrumental", "drums", "bass", "other", "guitar", "piano"]
+      "enum": [
+        "vocals",
+        "instrumental",
+        "drums",
+        "bass",
+        "other",
+        "guitar",
+        "piano",
+        "drums_kick",
+        "drums_snare",
+        "drums_cymbals",
+        "drums_toms"
+      ]
     },
     "publicErrorCode": {
       "enum": [

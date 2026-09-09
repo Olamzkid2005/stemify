@@ -45,12 +45,14 @@ def test_unknown_profile_is_rejected() -> None:
 
 
 def test_mode_resolves_profile_and_env_override_wins() -> None:
-    """full_stems resolves to the 6-stem profile; an explicit STEMIFY_MODEL_PROFILE
-    that supports the mode still wins; default mode keeps the 4-stem profile."""
+    """full_stems resolves to the 6-stem profile, drum_breakdown to drumsep; an
+    explicit STEMIFY_MODEL_PROFILE that supports the mode still wins; the default
+    mode keeps the 4-stem profile."""
     from worker.models.profiles import get_profile_for_mode
 
     assert get_profile_for_mode("full_stems").profile_id == "demucs_6s"
     assert get_profile_for_mode("vocals_instrumental").profile_id == "demucs_default"
+    assert get_profile_for_mode("drum_breakdown").profile_id == "drumsep"
 
     monkeypatch = pytest.MonkeyPatch()
     try:
@@ -58,6 +60,21 @@ def test_mode_resolves_profile_and_env_override_wins() -> None:
         assert get_profile_for_mode("vocals_instrumental").profile_id == "demucs_6s"
     finally:
         monkeypatch.undo()
+
+
+def test_drumsep_profile_invariants() -> None:
+    """Roadmap Phase B: the drumsep profile is allowlisted and structurally sane.
+
+    The checkpoint checksum is deliberately empty until it is pinned from a
+    verified download on the reference machine; the loader refuses to run with
+    an unpinned hash only after the first load surfaces it (see drumsep.py).
+    """
+    from worker.models.profiles import DRUMSEP_PROFILE, validate_profile
+
+    validate_profile(DRUMSEP_PROFILE)  # does not raise
+    assert DRUMSEP_PROFILE.model_stems == ("drums_kick", "drums_snare", "drums_cymbals", "drums_toms")
+    assert DRUMSEP_PROFILE.supported_modes == ("drum_breakdown",)
+    assert DRUMSEP_PROFILE.checkpoint_checksum == ""  # pinned on the reference machine
 
 
 def test_tampered_profile_fails_validation() -> None:

@@ -5,8 +5,27 @@
 export const SEPARATION_MODES = ["vocals_instrumental", "full_stems"] as const;
 export const OUTPUT_FORMATS = ["mp3", "wav", "flac", "ogg", "m4a"] as const;
 
-/** Stem keys shared with the contracts `stemKey` enum (archive is reserved for the ZIP). */
+/**
+ * Stem keys shared with the contracts `stemKey` enum (archive is reserved for
+ * the ZIP). Drum-part keys (roadmap Phase B) come from the refine-drums
+ * action, never from the upload flow.
+ */
 export const STEM_KEYS = [
+  "vocals",
+  "instrumental",
+  "drums",
+  "bass",
+  "other",
+  "guitar",
+  "piano",
+  "drums_kick",
+  "drums_snare",
+  "drums_cymbals",
+  "drums_toms",
+] as const;
+
+/** Stem keys a NEW upload job may reference (drum parts only come from refine). */
+export const UPLOAD_STEM_KEYS = [
   "vocals",
   "instrumental",
   "drums",

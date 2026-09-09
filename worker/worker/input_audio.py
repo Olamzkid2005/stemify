@@ -133,7 +133,7 @@ def run_ffprobe(path: Path) -> ProbeResult:
     )
 
 
-def validate_source(path: Path) -> ProbeResult:
+def validate_source(path: Path, max_file_bytes: int = MAX_FILE_BYTES) -> ProbeResult:
     """Full validation ladder: extension, size, ffprobe, duration (plan §32.4)."""
     if path.suffix.lower() not in _ALLOWED_EXTENSIONS:
         raise InputAudioError(ErrorCode.INVALID_AUDIO, f"unsupported extension {path.suffix!r}")
@@ -141,7 +141,7 @@ def validate_source(path: Path) -> ProbeResult:
     size = path.stat().st_size
     if size == 0:
         raise InputAudioError(ErrorCode.INVALID_AUDIO, "file is empty")
-    if size > MAX_FILE_BYTES:
+    if size > max_file_bytes:
         raise InputAudioError(ErrorCode.LIMIT_EXCEEDED, f"file is {size} bytes, over the limit")
 
     probe = run_ffprobe(path)
@@ -196,7 +196,11 @@ def decode_to_canonical_wav(source: Path, dest_wav: Path) -> None:
         )
 
 
-def prepare_source(source: Path, job_dir: Path) -> tuple[Path, ProbeResult]:
+def prepare_source(
+    source: Path,
+    job_dir: Path,
+    max_file_bytes: int = MAX_FILE_BYTES,
+) -> tuple[Path, ProbeResult]:
     """Validate a source inside job_dir and decode it to canonical input.wav."""
     resolved = source.resolve()
     job_resolved = job_dir.resolve()
@@ -205,7 +209,7 @@ def prepare_source(source: Path, job_dir: Path) -> tuple[Path, ProbeResult]:
     if not resolved.is_file():
         raise InputAudioError(ErrorCode.INVALID_AUDIO, "source file does not exist")
 
-    probe = validate_source(resolved)
+    probe = validate_source(resolved, max_file_bytes)
     dest = job_dir / "input.wav"
     decode_to_canonical_wav(resolved, dest)
     return dest, probe

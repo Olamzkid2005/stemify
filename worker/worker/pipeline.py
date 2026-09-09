@@ -60,19 +60,32 @@ def run_separation_stage(
 
     Returns (stems, mixture): the mixture is kept for the analysis stage
     (roadmap Phase C), which needs the full waveform for key detection.
+    Drum subdivision (roadmap Phase B) dispatches to the drumsep adapter, which
+    consumes the isolated drums stem as its "mixture".
     """
     from worker.input_audio import decode_to_waveform
 
     waveform, _probe = decode_to_waveform(canonical_wav)
     if progress_callback:
         progress_callback(Stage.SEPARATING, 30)
-    stems = separate(
-        waveform,
-        profile,
-        mode=mode,
-        progress_callback=None,
-        cancellation_checker=cancellation_checker,
-    )
+    if mode == "drum_breakdown":
+        from worker.models.drumsep import separate as separate_drums
+
+        stems = separate_drums(
+            waveform,
+            profile,
+            mode=mode,
+            progress_callback=None,
+            cancellation_checker=cancellation_checker,
+        )
+    else:
+        stems = separate(
+            waveform,
+            profile,
+            mode=mode,
+            progress_callback=None,
+            cancellation_checker=cancellation_checker,
+        )
     mixture = waveform
     if progress_callback:
         progress_callback(Stage.SEPARATING, 75)

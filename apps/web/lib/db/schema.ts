@@ -8,7 +8,7 @@
 
 export type JobStatus = "queued" | "processing" | "completed" | "failed" | "canceled" | "expired";
 export type SourceType = "upload" | "youtube";
-export type SeparationMode = "vocals_instrumental" | "full_stems";
+export type SeparationMode = "vocals_instrumental" | "full_stems" | "drum_breakdown";
 export type OutputFormat = "mp3" | "wav" | "flac" | "ogg" | "m4a";
 
 export type JobRow = {
@@ -65,19 +65,13 @@ export type JobOutputRow = {
   expires_at: number | null;
 };
 
-export const SQLITE_SCHEMA = `
-CREATE TABLE IF NOT EXISTS uploads (
-  id TEXT PRIMARY KEY,
-  owner_key TEXT NOT NULL,
-  filename TEXT NOT NULL,
-  object_key TEXT NOT NULL UNIQUE,
-  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
-  created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
-  expires_at INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS uploads_owner_created_idx ON uploads(owner_key, created_at);
-
+/**
+ * jobs DDL on its own: the mode CHECK could not be altered in place when
+ * drum_breakdown (roadmap Phase B) was added, so client.ts rebuilds the table
+ * from this exact DDL when it finds the older 2-value constraint. Keep in
+ * sync with worker/worker/database.py (JOBS_TABLE_DDL).
+ */
+export const JOBS_TABLE_DDL = `
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   access_token_hash TEXT,
@@ -90,7 +84,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   source_duration_seconds REAL,
   source_size_bytes INTEGER,
   source_sha256 TEXT,
-  mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems')),
+  mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems', 'drum_breakdown')),
   output_format TEXT NOT NULL CHECK (output_format IN ('mp3', 'wav', 'flac', 'ogg', 'm4a')),
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'canceled', 'expired')),
   stage TEXT,
@@ -108,6 +102,20 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
   UNIQUE (owner_key, idempotency_key_hash)
 );
+`;
+
+export const SQLITE_SCHEMA = JOBS_TABLE_DDL + `
+CREATE TABLE IF NOT EXISTS uploads (
+  id TEXT PRIMARY KEY,
+  owner_key TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  object_key TEXT NOT NULL UNIQUE,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+  created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+  expires_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS uploads_owner_created_idx ON uploads(owner_key, created_at);
 
 CREATE TABLE IF NOT EXISTS job_outputs (
   id TEXT PRIMARY KEY,

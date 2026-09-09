@@ -168,7 +168,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     separate = subparsers.add_parser("separate", help="one-shot separation of a local file")
     separate.add_argument("--input", required=True, help="path to a supported audio file")
-    separate.add_argument("--mode", default="vocals_instrumental", choices=["vocals_instrumental", "full_stems"])
+    separate.add_argument(
+        "--mode",
+        default="vocals_instrumental",
+        choices=["vocals_instrumental", "full_stems", "drum_breakdown"],
+        help="drum_breakdown splits a drums-stem recording into kick/snare/cymbals/toms",
+    )
     separate.add_argument("--format", default="mp3", choices=["mp3", "wav", "flac", "ogg", "m4a"])
     separate.add_argument("--output", required=True, help="directory for the generated stems")
     separate.set_defaults(func=command_separate)

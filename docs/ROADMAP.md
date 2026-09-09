@@ -104,27 +104,42 @@ Acceptance:
 
 ---
 
-## Phase B — Drum subdivision (kick/snare/hats)
+## Phase B — Drum subdivision (kick/snare/cymbals/toms)
 
 Hard gate: Phase A is completed, benchmarked, and in daily use first.
 
-- **Model**: `drumsep` (Inria, E. Moliner) — the only open checkpoint doing
-  kick/snare/cymbals subdivision. It is a separate codebase (julia/DCASE-style
-  wrapper around a small network), not a demucs profile; expect an adapter in
-  `worker/worker/models/` with its own profile entry, checkpoint checksum, and
-  license review. Input is the demucs `drums` stem, output ~4-5 drum parts.
-- **Interaction model**: new separation mode `drum_breakdown` operating on an
-  existing completed job's drums stem (a "Refine drums" action on the stem
-  card), not a new full-pipeline mode. The refined parts are encoded/published
-  as extra `job_outputs` rows keyed `drums_kick`, `drums_snare`, etc.
+**Implementation status (2026-09-09): code complete; quality gate pending.**
+
+- **Model**: `drumsep` (inagoy/drumsep, 2022) — MIT-licensed code; a hybrid-
+  demucs checkpoint distributed as a single `49469ca8.th` file on Google Drive
+  (file id `1-Dm666ScPkg8Gt2-lK3Ua0xOudWHZBGC`, per the project's own install
+  script). Not a demucs remote-index model: it loads via demucs' local-repo
+  API (`get_model(name, repo=dir)`) through the adapter in
+  `worker/worker/models/drumsep.py`. Output: 4 parts — kick, snare, cymbals,
+  toms (source-name mapping with positional fallback, locked by tests).
+- **Reference-machine setup (one-time)**:
+  `pip install gdown; gdown 1-Dm666ScPkg8Gt2-lK3Ua0xOudWHZBGC -O data/models/drumsep/49469ca8.th`
+  The first refine run prints the checkpoint's sha256 prefix to stderr; pin it
+  as `checkpoint_checksum` in `DRUMSEP_PROFILE` so every later load is
+  verified (empty checksum = unpinned, by design until that first run).
+- **Interaction model**: new separation mode `drum_breakdown`. The web
+  "Refine drums" action on a completed job queues a normal refine job whose
+  input is the parent's stored drums output — the standard worker pipeline
+  (validate/decode/separate/encode/package) runs unchanged. Outputs are extra
+  `job_outputs` rows keyed `drums_kick`/`drums_snare`/`drums_cymbals`/
+  `drums_toms`; the parent job keeps its own outputs. BPM/key analysis is
+  skipped for refine jobs (meaningless on drum parts). The jobs.mode CHECK
+  constraint was widened by a gated table-rebuild migration on both clients
+  (SQLite cannot alter a CHECK).
 - **Risk register**: experimental SDR quality (noticeably below htdemucs),
-  second model download (~100 MB), slower jobs, and an adapter outside the
-  demucs wrapper. If quality on real tracks disappoints, this phase is dropped
-  without further investment.
+  second model download, slower jobs, no publisher-published checkpoint hash
+  (pin-on-first-run above). If quality on real tracks disappoints, this phase
+  is dropped without further investment.
 
 Acceptance for staying in the roadmap at all:
 - [ ] A main-machine quality pass on 3-5 real tracks; product owner listens.
-- [ ] Only then: schema/labels/UI plumbing mirroring A2/A3 for the drum parts.
+- [x] Schema/labels/UI plumbing mirroring A2/A3 for the drum parts (shipped
+      ahead of the quality gate so the listen test exercises the real flow).
 
 ---
 

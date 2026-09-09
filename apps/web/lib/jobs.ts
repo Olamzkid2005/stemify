@@ -27,7 +27,12 @@ export type CreateJobInput = {
 
 export type CreateJobResult = CreateJobSuccess | CreateJobFailure;
 
-function idempotencyHash(ownerKey: string, key: string): string {
+/**
+ * HMAC of an idempotency key for one owner. Exported for the refine-drums
+ * route (roadmap Phase B), which derives a deterministic key per parent job so
+ * double clicks return the same refine job instead of stacking duplicates.
+ */
+export function idempotencyHash(ownerKey: string, key: string): string {
   const secret = process.env.JOB_ACCESS_TOKEN_SECRET;
   if (!secret) throw new Error("JOB_ACCESS_TOKEN_SECRET is not set");
   return createHmac("sha256", secret).update(`${ownerKey}:${key}`).digest("hex");

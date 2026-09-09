@@ -32,7 +32,8 @@ export type DownloadResolution =
 /** Strict request shape: kind plus stem, no path-like input accepted. */
 export type DownloadRequest = {
   kind: DownloadKind;
-  /** Stem key for kind=stem; must match ^[a-z]{1,16}$ before any DB lookup. */
+  /** Stem key for kind=stem; must match ^[a-z_]{1,16}$ before any DB lookup
+   *  (underscores: drum-part keys like drums_kick, roadmap Phase B). */
   stem?: string;
 };
 
@@ -41,7 +42,7 @@ export function parseDownloadRequest(params: URLSearchParams): DownloadRequest |
   if (kind === "zip") return { kind: "zip" };
   if (kind !== "stem") return null;
   const stem = params.get("stem");
-  if (stem === null || !/^[a-z]{1,16}$/.test(stem)) return null;
+  if (stem === null || !/^[a-z_]{1,16}$/.test(stem)) return null;
   return { kind: "stem", stem };
 }
 
@@ -113,6 +114,11 @@ const STEM_LABELS: Record<string, string> = {
   other: "Extracted Other",
   guitar: "Extracted Guitar",
   piano: "Extracted Piano",
+  // Drum subdivision (roadmap Phase B).
+  drums_kick: "Extracted Kick",
+  drums_snare: "Extracted Snare",
+  drums_cymbals: "Extracted Cymbals",
+  drums_toms: "Extracted Toms",
 };
 
 /** Drop the extension and filesystem-illegal characters, collapse whitespace. */
