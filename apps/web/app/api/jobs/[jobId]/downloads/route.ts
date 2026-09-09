@@ -52,8 +52,9 @@ export async function GET(
     );
   }
 
-  const { output, filePath, sizeBytes } = resolution;
-  const disposition = `attachment; filename="${contentDispositionFilename(output, jobId)}"`;
+  const { output, sourceFilename, filePath, sizeBytes } = resolution;
+  const signature = contentDispositionFilename(output, sourceFilename);
+  const disposition = `attachment; filename="${signature.filename}"; filename*=UTF-8''${signature.filenameUtf8}`;
   const baseHeaders: Record<string, string> = {
     "content-type": output.mime_type,
     "content-disposition": disposition,

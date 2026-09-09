@@ -178,17 +178,35 @@ describe("parseSingleRange", () => {
 });
 
 describe("contentDispositionFilename", () => {
-  it("builds safe ASCII filenames from the stored output", () => {
-    const output = {
-      stem_key: "vocals",
-      relative_path: "results/x/vocals.mp3",
-    } as never;
-    const archive = {
-      stem_key: "archive",
-      relative_path: "results/x/stems.zip",
-    } as never;
-    const jobId = "job_" + "a".repeat(32);
-    assert.equal(contentDispositionFilename(output, jobId), `vocals-${jobId}.mp3`);
-    assert.equal(contentDispositionFilename(archive, jobId), `stemify-${jobId}.zip`);
+  const output = {
+    stem_key: "vocals",
+    relative_path: "results/x/vocals.mp3",
+  } as never;
+  const archive = {
+    stem_key: "archive",
+    relative_path: "results/x/stems.zip",
+  } as never;
+
+  it("builds 'Song - Extracted Stem' names from the original upload name", () => {
+    const result = contentDispositionFilename(output, "try by lewis.mp3");
+    assert.equal(result.filename, "try by lewis - Extracted Vocals.mp3");
+    assert.equal(result.filenameUtf8, encodeURIComponent("try by lewis - Extracted Vocals.mp3"));
+  });
+
+  it("names the ZIP 'Song - Stems.zip'", () => {
+    const result = contentDispositionFilename(archive, "try by lewis.mp3");
+    assert.equal(result.filename, "try by lewis - Stems.zip");
+  });
+
+  it("strips filesystem-illegal characters and falls back when the song name is empty", () => {
+    const hostile = contentDispositionFilename(output, 'song: *bad?"name\\.mp3');
+    assert.equal(hostile.filename, "song bad name - Extracted Vocals.mp3");
+    assert.equal(contentDispositionFilename(output, null).filename, "stemify - Extracted Vocals.mp3");
+  });
+
+  it("keeps a pure-ASCII filename while encoding non-ASCII in the UTF-8 variant", () => {
+    const emoji = contentDispositionFilename(output, "DJ 😂 Mix.mp3");
+    assert.equal(emoji.filename, "DJ Mix - Extracted Vocals.mp3");
+    assert.equal(emoji.filenameUtf8, encodeURIComponent("DJ 😂 Mix - Extracted Vocals.mp3"));
   });
 });

@@ -21,6 +21,8 @@ export type DownloadResolution =
   | {
       ok: true;
       output: JobOutputRow;
+      /** Original song/upload name, used to build friendly download filenames. */
+      sourceFilename: string | null;
       /** Absolute local path inside the data directory. */
       filePath: string;
       sizeBytes: number;
@@ -99,14 +101,56 @@ export async function resolveDownload(
     return { ok: false, status: 410, error: "result_unavailable" };
   }
 
-  return { ok: true, output, filePath, sizeBytes: info.sizeBytes };
+  return { ok: true, output, sourceFilename: job.source_filename, filePath, sizeBytes: info.sizeBytes };
 }
 
-/** `attachment; filename="..."` header value for a stored output. */
-export function contentDispositionFilename(output: JobOutputRow, jobId: string): string {
+/** Human labels used in download filenames: "Song - Extracted Vocals.mp3". */
+const STEM_LABELS: Record<string, string> = {
+  vocals: "Extracted Vocals",
+  instrumental: "Extracted Instrumental",
+  drums: "Extracted Drums",
+  bass: "Extracted Bass",
+  other: "Extracted Other",
+  guitar: "Extracted Guitar",
+  piano: "Extracted Piano",
+};
+
+/** Drop the extension and filesystem-illegal characters, collapse whitespace. */
+function sanitizeFilenameBase(raw: string, maxLength: number): string {
+  return raw
+    .replace(/\.[a-z0-9]{1,5}$/i, "")
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength)
+    .trim();
+}
+
+/**
+ * Download filename built from the song name and stem label, e.g.
+ * "Try By Lewis - Extracted Vocals.mp3"; the ZIP is "Song - Stems.zip".
+ * Song names (especially YouTube titles) routinely contain non-ASCII, so this
+ * returns an ASCII fallback for `filename` plus an RFC 5987 UTF-8 variant for
+ * `filename*`; raw non-ASCII would crash Node header serialization (emoji).
+ */
+export function contentDispositionFilename(
+  output: JobOutputRow,
+  sourceFilename: string | null,
+): { filename: string; filenameUtf8: string } {
+  const song = sanitizeFilenameBase(sourceFilename ?? "", 80) || "stemify";
+  const label = STEM_LABELS[output.stem_key] ?? output.stem_key;
+  const base = output.stem_key === "archive" ? `${song} - Stems` : `${song} - ${label}`;
   const extension = output.relative_path.split(".").pop() ?? "bin";
-  const base = output.stem_key === "archive" ? "stemify" : output.stem_key;
-  return `${base}-${jobId}.${extension}`;
+  const asciiFallback =
+    base
+      .replace(/[^\x20-\x7e]/g, "")
+      .replace(/["\\]/g, "")
+      .replace(/\s+/g, " ")
+      .trim() || "stemify";
+  return {
+    filename: `${asciiFallback}.${extension}`,
+    filenameUtf8: encodeURIComponent(`${base}.${extension}`),
+  };
 }
 
 /**
