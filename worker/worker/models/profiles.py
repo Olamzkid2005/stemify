@@ -112,20 +112,22 @@ QUALITY_PRESETS: dict[str, tuple[float, int]] = {
 DEFAULT_QUALITY = "balanced"
 
 
-def resolve_quality() -> tuple[str, float, int]:
-    """Resolve STEMIFY_QUALITY to (preset_name, overlap, inference_shifts).
+def resolve_quality(preset: str | None = None) -> tuple[str, float, int]:
+    """Resolve a quality preset to (preset_name, overlap, inference_shifts).
 
-    Mirrors resolve_device's strictness: an unknown value fails loudly with
-    MODEL_LOAD_FAILED instead of silently processing at a surprise quality.
+    An explicit preset (per-job column, validated app-side) wins; otherwise
+    STEMIFY_QUALITY decides; otherwise the balanced default. Unknown values
+    fail loudly with MODEL_LOAD_FAILED instead of silently processing at a
+    surprise quality (mirrors resolve_device's strictness).
     """
-    raw = (os.environ.get("STEMIFY_QUALITY") or DEFAULT_QUALITY).strip().lower()
-    preset = QUALITY_PRESETS.get(raw)
-    if preset is None:
+    raw = (preset or os.environ.get("STEMIFY_QUALITY") or DEFAULT_QUALITY).strip().lower()
+    quality = QUALITY_PRESETS.get(raw)
+    if quality is None:
         raise SeparationError(
             ErrorCode.MODEL_LOAD_FAILED,
-            f"unknown STEMIFY_QUALITY {raw!r}; expected one of {sorted(QUALITY_PRESETS)}",
+            f"unknown quality preset {raw!r}; expected one of {sorted(QUALITY_PRESETS)}",
         )
-    return raw, preset[0], preset[1]
+    return raw, quality[0], quality[1]
 
 _VALID_MODES = frozenset({"vocals_instrumental", "full_stems", "drum_breakdown"})
 _VALID_DEVICES = frozenset({"auto", "cpu", "cuda"})

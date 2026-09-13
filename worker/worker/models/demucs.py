@@ -148,6 +148,7 @@ def separate(
     mode: str = "vocals_instrumental",
     progress_callback: ProgressCallback | None = None,
     cancellation_checker: CancellationChecker | None = None,
+    quality: str | None = None,
 ) -> dict[str, np.ndarray]:
     """Separate a canonical stereo waveform into named numpy stems (plan 12.5)."""
     profile = profile or get_profile_for_mode(mode)
@@ -167,9 +168,9 @@ def separate(
     model, device = load_model(profile)
     th = _import_torch()
 
-    # STEMIFY_QUALITY presets (docs/BENCHMARKS.md) override the profile's
-    # pinned inference settings at run time; balanced uses the pinned values.
-    _quality_name, quality_overlap, quality_shifts = resolve_quality()
+    # Per-job quality preset (or STEMIFY_QUALITY env fallback) overrides the
+    # profile's pinned inference settings; balanced uses the pinned values.
+    _quality_name, quality_overlap, quality_shifts = resolve_quality(quality)
 
     tensor: Any = None
     try:

@@ -311,5 +311,7 @@ def test_output_manifest_rejects_wrong_schema_version(registry) -> None:
 def test_output_manifest_rejects_unknown_stem_name(registry) -> None:
     validator = validator_for("output-manifest.schema.json", registry)
     bad = _manifest()
-    bad["output"]["stems"][0]["name"] = "guitar"
+    # "guitar" became a valid stem key with the 6-stem model; use a name
+    # outside the stemKey enum to keep testing the rejection path.
+    bad["output"]["stems"][0]["name"] = "cowbell"
     assert_invalid(validator, bad)

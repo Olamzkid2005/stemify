@@ -272,6 +272,16 @@ def test_resolve_quality_presets_and_unknown_value(
     assert excinfo.value.code == ErrorCode.MODEL_LOAD_FAILED
 
 
+def test_explicit_job_quality_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A per-job preset (DB column) wins over the STEMIFY_QUALITY env default."""
+    from worker.models.profiles import resolve_quality
+
+    monkeypatch.setenv("STEMIFY_QUALITY", "fast")
+    assert resolve_quality("best") == ("best", 0.45, 5)
+    # None falls back to the env var.
+    assert resolve_quality(None) == ("fast", 0.25, 0)
+
+
 def test_quality_preset_reaches_inference(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

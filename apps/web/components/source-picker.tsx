@@ -4,10 +4,18 @@ import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { UploadDropzone } from "@/components/upload-dropzone";
-import { OUTPUT_FORMATS, SEPARATION_MODES } from "@/lib/limits";
+import { OUTPUT_FORMATS, QUALITY_PRESETS, SEPARATION_MODES } from "@/lib/limits";
 
 type SeparationMode = (typeof SEPARATION_MODES)[number];
 type OutputFormat = (typeof OUTPUT_FORMATS)[number];
+type QualityPreset = (typeof QUALITY_PRESETS)[number];
+
+/** UI labels + the honest cost of each preset (docs/BENCHMARKS.md). */
+const QUALITY_OPTIONS: { value: QualityPreset; label: string; hint: string }[] = [
+  { value: "fast", label: "Fast", hint: "quickest, rougher edges" },
+  { value: "balanced", label: "Balanced", hint: "recommended" },
+  { value: "best", label: "Best", hint: "slowest, cleanest stems" },
+];
 
 type SourceTab = "upload" | "youtube";
 
@@ -32,6 +40,7 @@ export function SourcePicker() {
   const [tab, setTab] = useState<SourceTab>("upload");
   const [separationMode, setSeparationMode] = useState<SeparationMode>("vocals_instrumental");
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("mp3");
+  const [quality, setQuality] = useState<QualityPreset>("balanced");
   const [error, setError] = useState<string | null>(null);
 
   // YouTube tab state (secondary feature — upload stays the default tab).
@@ -51,6 +60,7 @@ export function SourcePicker() {
             source,
             mode: separationMode,
             outputFormat,
+            quality,
             idempotencyKey: crypto.randomUUID(),
           }),
         });
@@ -66,7 +76,7 @@ export function SourcePicker() {
         setSubmitting(false);
       }
     },
-    [outputFormat, router, separationMode],
+    [outputFormat, quality, router, separationMode],
   );
 
   const handleUploaded = useCallback(
@@ -195,6 +205,21 @@ export function SourcePicker() {
           {OUTPUT_FORMATS.map((format) => <option key={format} value={format}>{format.toUpperCase()}</option>)}
         </select>
       </label>
+
+      <div className="mt-4 flex flex-col items-center">
+        <span className="mb-3 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Quality</span>
+        <div className="flex items-center gap-1 rounded-xl border border-zinc-800/90 bg-[#121215] p-1">
+          {QUALITY_OPTIONS.map((option) => (
+            <OptionButton
+              key={option.value}
+              active={quality === option.value}
+              onClick={() => setQuality(option.value)}
+            >
+              {option.label} <span className="font-normal text-zinc-600">({option.hint})</span>
+            </OptionButton>
+          ))}
+        </div>
+      </div>
 
       <p aria-live="polite" className="mt-3 min-h-5 text-xs text-red-400">{error}</p>
     </div>

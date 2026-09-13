@@ -202,6 +202,7 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                     else "Separation complete; preparing stem files",
                 ),
                 cancellation_checker=_cancellation_checker(queue, job.id),
+                quality=job.quality,
             )
             _raise_if_canceled(queue, job.id)
 

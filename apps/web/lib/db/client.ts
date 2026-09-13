@@ -35,6 +35,19 @@ export class LocalDatabase {
     // during the rebuild (mirrors worker/worker/database.py).
     this.migrateJobsModeCheck();
     this.connection.exec(SQLITE_SCHEMA);
+    this.migrateAddQualityColumn();
+  }
+
+  /**
+   * Add jobs.quality to databases created before per-job quality existed
+   * (mirrors worker/worker/database.py). Additive ALTER: nullable column,
+   * no rebuild, old rows read NULL = worker default.
+   */
+  private migrateAddQualityColumn(): void {
+    const columns = this.all<{ name: string }>("PRAGMA table_info(jobs)");
+    if (!columns.some((column) => column.name === "quality")) {
+      this.run("ALTER TABLE jobs ADD COLUMN quality TEXT");
+    }
   }
 
   /**

@@ -11,6 +11,8 @@ export type SourceType = "upload" | "youtube";
 export type SeparationMode = "vocals_instrumental" | "full_stems" | "drum_breakdown";
 export type OutputFormat = "mp3" | "wav" | "flac" | "ogg" | "m4a";
 
+export type QualityPreset = "fast" | "balanced" | "best";
+
 export type JobRow = {
   id: string;
   access_token_hash: string | null;
@@ -25,6 +27,8 @@ export type JobRow = {
   source_sha256: string | null;
   mode: SeparationMode;
   output_format: OutputFormat;
+  /** Per-job quality preset; null = worker default (STEMIFY_QUALITY). */
+  quality: QualityPreset | null;
   status: JobStatus;
   stage: string | null;
   progress: number;
@@ -86,6 +90,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   source_sha256 TEXT,
   mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems', 'drum_breakdown')),
   output_format TEXT NOT NULL CHECK (output_format IN ('mp3', 'wav', 'flac', 'ogg', 'm4a')),
+  quality TEXT,
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'canceled', 'expired')),
   stage TEXT,
   progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),

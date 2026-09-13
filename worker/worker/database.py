@@ -38,6 +38,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   source_sha256 TEXT,
   mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems', 'drum_breakdown')),
   output_format TEXT NOT NULL CHECK (output_format IN ('mp3', 'wav', 'flac', 'ogg', 'm4a')),
+  -- Per-job quality preset (STEMIFY_QUALITY values); NULL = worker default.
+  -- Nullable TEXT on purpose: validation is app-side, so a future preset
+  -- never needs another table rebuild (SQLite cannot alter CHECKs).
+  quality TEXT,
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'canceled', 'expired')),
   stage TEXT,
   progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
@@ -112,6 +116,7 @@ class ClaimedJob:
     source_object_key: str | None
     mode: str = "vocals_instrumental"
     output_format: str = "mp3"
+    quality: str | None = None
     source_filename: str | None = None
     expires_at: int | None = None
     source_url: str | None = None
@@ -163,6 +168,7 @@ class JobQueue:
         # during the rebuild.
         self._migrate_jobs_mode_check()
         self._connection.executescript(SQLITE_SCHEMA)
+        self._migrate_add_quality_column()
 
     def close(self) -> None:
         self._connection.close()
@@ -227,6 +233,18 @@ class JobQueue:
         if violations:
             raise RuntimeError(f"foreign key violations after jobs rebuild: {violations!r}")
 
+    def _migrate_add_quality_column(self) -> None:
+        """Add jobs.quality to databases created before per-job quality existed.
+
+        Additive ALTER (no rebuild): the column is nullable and validated
+        app-side, so old rows simply read NULL = worker default.
+        """
+        columns = {
+            row[1] for row in self._connection.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "quality" not in columns:
+            self._connection.execute("ALTER TABLE jobs ADD COLUMN quality TEXT")
+
     def claim_next_queued_job(self) -> ClaimedJob | None:
         """Atomically move the oldest queued job to processing (plan Section 11.2)."""
         now = _now_ms()
@@ -235,7 +253,7 @@ class JobQueue:
             cursor.execute("BEGIN IMMEDIATE")
             row = cursor.execute(
                 "SELECT id, source_type, source_object_key, mode, output_format, "
-                "source_filename, expires_at, source_url FROM jobs "
+                "source_filename, expires_at, source_url, quality FROM jobs "
                 "WHERE status = 'queued' ORDER BY created_at, id LIMIT 1"
             ).fetchone()
             if row is None:
@@ -260,6 +278,7 @@ class JobQueue:
                 source_filename=row[5],
                 expires_at=row[6],
                 source_url=row[7],
+                quality=row[8],
             )
         except BaseException:
             self._connection.execute("ROLLBACK")

@@ -6,6 +6,13 @@ export const SEPARATION_MODES = ["vocals_instrumental", "full_stems"] as const;
 export const OUTPUT_FORMATS = ["mp3", "wav", "flac", "ogg", "m4a"] as const;
 
 /**
+ * Per-job quality presets (STEMIFY_QUALITY values). The worker resolves them
+ * to inference overlap/shifts; omitting quality uses the worker's default.
+ */
+export const QUALITY_PRESETS = ["fast", "balanced", "best"] as const;
+export type QualityPreset = (typeof QUALITY_PRESETS)[number];
+
+/**
  * Stem keys shared with the contracts `stemKey` enum (archive is reserved for
  * the ZIP). Drum-part keys (roadmap Phase B) come from the refine-drums
  * action, never from the upload flow.

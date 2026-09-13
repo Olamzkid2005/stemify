@@ -110,4 +110,47 @@ describe("createJob", () => {
     assert.equal(result.ok, false);
     if (!result.ok) assert.equal(result.status, 400);
   });
+
+  it("persists the chosen quality preset on the created job", async () => {
+    const body = {
+      ...structuredClone(validBody),
+      quality: "best",
+      idempotencyKey: "client-key-quality-0000001",
+    } as typeof validBody & { quality: string };
+    const result = await createJob({ ownerKey: OWNER, body });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    const row = db.get<{ quality: string | null }>(
+      "SELECT quality FROM jobs WHERE id = ?",
+      result.job.id,
+    );
+    assert.equal(row?.quality, "best");
+  });
+
+  it("rejects an unknown quality preset", async () => {
+    const bad = {
+      ...structuredClone(validBody),
+      quality: "ultra",
+      idempotencyKey: "client-key-quality-0000002",
+    } as typeof validBody & { quality: string };
+    const result = await createJob({ ownerKey: OWNER, body: bad });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.status, 400);
+  });
+
+  it("stores null quality when the picker value is omitted (worker default)", async () => {
+    const body = {
+      ...structuredClone(validBody),
+      idempotencyKey: "client-key-quality-0000003",
+    };
+    delete (body as { quality?: string }).quality;
+    const result = await createJob({ ownerKey: OWNER, body });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    const row = db.get<{ quality: string | null }>(
+      "SELECT quality FROM jobs WHERE id = ?",
+      result.job.id,
+    );
+    assert.equal(row?.quality, null);
+  });
 });

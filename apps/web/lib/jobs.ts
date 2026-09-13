@@ -9,9 +9,9 @@ import { createHmac, randomUUID } from "node:crypto";
 import { db } from "@/lib/db/client";
 import { type JobRow, type JobStatus, type SeparationMode, type OutputFormat, type UploadRow } from "@/lib/db/schema";
 import { getStorage } from "@/lib/storage";
-import { CLIENT_LIMITS, OUTPUT_FORMATS, SEPARATION_MODES } from "@/lib/limits";
+import { CLIENT_LIMITS, OUTPUT_FORMATS, QUALITY_PRESETS, SEPARATION_MODES } from "@/lib/limits";
 
-export { OUTPUT_FORMATS, SEPARATION_MODES };
+export { OUTPUT_FORMATS, QUALITY_PRESETS, SEPARATION_MODES };
 
 type CreateJobSuccess = { ok: true; status: 201 | 200; job: { id: string; status: JobStatus } };
 type CreateJobFailure = {
@@ -64,13 +64,22 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
     return { ok: false, status: 400, error: "invalid_request" };
   }
 
-  const { source, mode, outputFormat, idempotencyKey } = input.body;
+  const { source, mode, outputFormat, quality, idempotencyKey } = input.body;
   if (
     !(SEPARATION_MODES as readonly unknown[]).includes(mode) ||
     !(OUTPUT_FORMATS as readonly unknown[]).includes(outputFormat) ||
     typeof idempotencyKey !== "string" ||
     idempotencyKey.length < 16 ||
     idempotencyKey.length > 128
+  ) {
+    return { ok: false, status: 400, error: "invalid_request" };
+  }
+  // Quality is optional: undefined/null = worker default (STEMIFY_QUALITY);
+  // otherwise it must be an exact preset name.
+  if (
+    quality !== undefined &&
+    quality !== null &&
+    !(QUALITY_PRESETS as readonly unknown[]).includes(quality)
   ) {
     return { ok: false, status: 400, error: "invalid_request" };
   }
@@ -132,8 +141,8 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
   db.run(
     `INSERT OR IGNORE INTO jobs (
       id, owner_key, source_type, source_filename, source_object_key, source_url,
-      mode, output_format, status, idempotency_key_hash
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+      mode, output_format, quality, status, idempotency_key_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
     jobId,
     input.ownerKey,
     source.type === "youtube" ? "youtube" : "upload",
@@ -142,6 +151,7 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
     source.type === "youtube" ? source.url : null,
     mode as SeparationMode,
     outputFormat as OutputFormat,
+    typeof quality === "string" ? quality : null,
     keyHash,
   );
 

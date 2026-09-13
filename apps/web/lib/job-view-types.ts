@@ -13,6 +13,8 @@ export type JobView = {
   source: { type: "upload" | "youtube"; filename: string | null };
   mode: string;
   outputFormat: string;
+  /** Per-job quality preset; absent when the job uses the worker default. */
+  quality?: "fast" | "balanced" | "best";
   createdAt: string;
   updatedAt: string;
   // completed only:

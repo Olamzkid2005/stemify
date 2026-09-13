@@ -31,6 +31,7 @@
     },
     "mode": { "$ref": "common.schema.json#/$defs/separationMode" },
     "outputFormat": { "$ref": "common.schema.json#/$defs/outputFormat" },
+    "quality": { "$ref": "common.schema.json#/$defs/qualityPreset" },
     "stems": {
       "type": "array",
       "items": { "$ref": "common.schema.json#/$defs/stemDescriptor" },

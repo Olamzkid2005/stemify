@@ -88,6 +88,7 @@ def separate(
     mode: str = "drum_breakdown",
     progress_callback: ProgressCallback | None = None,
     cancellation_checker: CancellationChecker | None = None,
+    quality: str | None = None,
 ) -> dict[str, Any]:
     """Split a canonical stereo DRUMS waveform into drum-part stems.
 
@@ -153,9 +154,9 @@ def separate(
 
     th = _import_torch()
 
-    # STEMIFY_QUALITY presets (docs/BENCHMARKS.md) override the profile's
-    # pinned inference settings at run time; balanced uses the pinned values.
-    _quality_name, quality_overlap, quality_shifts = resolve_quality()
+    # Per-job quality preset (or STEMIFY_QUALITY env fallback) overrides the
+    # profile's pinned inference settings; balanced uses the pinned values.
+    _quality_name, quality_overlap, quality_shifts = resolve_quality(quality)
 
     tensor: Any = None
     try:
