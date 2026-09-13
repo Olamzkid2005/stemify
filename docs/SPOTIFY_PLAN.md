@@ -12,6 +12,33 @@ runs. The job page, ZIP naming, analysis, and downloads all work exactly as
 they do today because the pipeline downstream of "we have an audio file" is
 source-agnostic.
 
+### 1.1 Landscape note: the SpotSaver pattern (evaluated, rejected for audio)
+
+Browser tools like SpotSaver advertise "Spotify links to 320kbps MP3" but do
+NOT download Spotify audio. Their own FAQ: "not a Spotify ripper... uses user
+provided Spotify links only to identify metadata and search" — the link is
+resolved to a song name via the Web API (or scraping), the audio is ripped
+from YouTube, and the Spotify metadata is stamped onto the YouTube rip. The
+320kbps label is a re-encode of ~128-160kbps source audio.
+
+Why this is the wrong audio path for Stemify specifically:
+
+- Separation quality is bounded by source fidelity. A loudness-normalized,
+  lossy-re-encoded YouTube rip (sometimes a sped-up or wrong master) is the
+  worst-case input for a separator; bleeds and artifacts amplify.
+- Stemify already has first-class YouTube input — a Spotify-link-to-YouTube
+  detour adds a failure point and arrives at the same (worse) audio.
+- librespot streams the actual Spotify audio from the user's own Premium
+  account: the cleanest source available, decoded exactly once.
+
+What IS worth borrowing from that pattern (both go on the roadmap):
+
+1. **Rich metadata embedding**: artist / album / artwork / release date written
+   into the output files' tags (ID3/Vorbis) and the manifest — currently we
+   only name files. Benefits every source type, not just Spotify.
+2. **Playlist/album expansion**: a playlist link fans out into N normal jobs
+   (rate-limited); v1 stays single-track (Section 9 non-goals unchanged).
+
 ## 2. The two halves: metadata vs audio
 
 Spotify is two completely different problems, and conflating them is the #1
