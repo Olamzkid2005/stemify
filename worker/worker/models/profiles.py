@@ -32,7 +32,8 @@ DEFAULT_PROFILE = ModelProfile(
     instrumental_policy="mixture_minus_vocals",
     device_policy="auto",
     chunk_length_seconds=None,  # model default segment
-    overlap=0.25,
+    overlap=0.4,
+    inference_shifts=2,
     precision="float32",
     license_reference="MIT (facebookresearch/demucs), model weights MIT",
 )
@@ -55,7 +56,8 @@ SIX_STEM_PROFILE = ModelProfile(
     instrumental_policy="mixture_minus_vocals",
     device_policy="auto",
     chunk_length_seconds=None,  # model default segment
-    overlap=0.25,
+    overlap=0.4,
+    inference_shifts=2,
     precision="float32",
     license_reference="MIT (facebookresearch/demucs), model weights MIT",
 )
@@ -85,7 +87,8 @@ DRUMSEP_PROFILE = ModelProfile(
     instrumental_policy="direct_model_output",
     device_policy="auto",
     chunk_length_seconds=None,  # model default segment
-    overlap=0.25,
+    overlap=0.4,
+    inference_shifts=2,
     precision="float32",
     license_reference="MIT (inagoy/drumsep), model weights by the drumsep authors",
 )
@@ -165,3 +168,5 @@ def _check_invariants(profile: ModelProfile) -> None:
         raise SeparationError(ErrorCode.MODEL_LOAD_FAILED, "unsupported sample rate or channel layout")
     if not 0 <= profile.overlap < 0.5:
         raise SeparationError(ErrorCode.MODEL_LOAD_FAILED, "overlap must be in [0, 0.5)")
+    if profile.inference_shifts < 0 or profile.inference_shifts > 5:
+        raise SeparationError(ErrorCode.MODEL_LOAD_FAILED, "inference_shifts must be in [0, 5]")

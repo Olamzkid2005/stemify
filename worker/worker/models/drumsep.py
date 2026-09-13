@@ -164,7 +164,7 @@ def separate(
                 model,
                 tensor,
                 device=resolved,
-                shifts=0,
+                shifts=profile.inference_shifts,
                 split=True,
                 overlap=profile.overlap,
                 segment=profile.chunk_length_seconds,

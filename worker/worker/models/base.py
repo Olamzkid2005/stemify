@@ -40,6 +40,10 @@ class ModelProfile:
     # between consecutive chunks.
     chunk_length_seconds: float | None
     overlap: float
+    # demucs apply_model shifts: the waveform is shifted by a random offset this
+    # many extra times and the estimates averaged. Higher = cleaner stems at a
+    # near-linear time cost (quality/speed tradeoff, docs/BENCHMARKS.md).
+    inference_shifts: int
     precision: str
     license_reference: str
 

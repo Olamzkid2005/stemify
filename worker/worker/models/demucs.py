@@ -5,7 +5,7 @@ lazy, so this module imports cleanly without the model stack.
 
 Inference policy (fixed for this adapter):
 - Uses demucs' own maintained chunked inference path (apply_model, split=True),
-  shifts=0, float32. No custom stitching.
+  profile-tuned overlap and shifts, float32. No custom stitching.
 - 4.0.1 apply_model exposes no per-chunk callback, so progress_callback fires
   at stage boundaries (0.0 before, 1.0 after) and cancellation is checked
   before and after inference. Coarse on purpose; see plan Section 13.1.
@@ -174,7 +174,7 @@ def separate(
                 model,
                 tensor,
                 device=device,
-                shifts=0,
+                shifts=profile.inference_shifts,
                 split=True,
                 overlap=profile.overlap,
                 segment=profile.chunk_length_seconds,
