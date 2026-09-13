@@ -12,14 +12,20 @@ runs. The job page, ZIP naming, analysis, and downloads all work exactly as
 they do today because the pipeline downstream of "we have an audio file" is
 source-agnostic.
 
-### 1.1 Landscape note: the SpotSaver pattern (evaluated, rejected for audio)
+### 1.1 Landscape note: the SpotSaver/SpotiDownloader pattern (evaluated, rejected for audio)
 
-Browser tools like SpotSaver advertise "Spotify links to 320kbps MP3" but do
-NOT download Spotify audio. Their own FAQ: "not a Spotify ripper... uses user
-provided Spotify links only to identify metadata and search" — the link is
-resolved to a song name via the Web API (or scraping), the audio is ripped
-from YouTube, and the Spotify metadata is stamped onto the YouTube rip. The
-320kbps label is a re-encode of ~128-160kbps source audio.
+Browser tools like SpotSaver and spotidownloader.com advertise "Spotify links
+to 320kbps MP3" but do NOT download Spotify audio. Confirmed mechanism (from
+site disclaimers and independent teardowns): the link is resolved to metadata
+via Spotify's public surface, the song title is searched on YouTube, that
+audio is downloaded, transcoded, and stamped with the Spotify artwork/tags.
+The structural tell: none of these sites ever asks for a Spotify login —
+real Spotify audio requires Premium authentication, so without an account
+they cannot be fetching Spotify audio. spotidownloader.com's own footer
+admits it: "content provided by Third-Party Services outside of Spotify".
+Users of these tools routinely receive the wrong master (sped-up, live,
+cover, remaster) because the match is by title string, not by recording.
+The "320kbps" label is a re-encode of ~128-160kbps source audio.
 
 Why this is the wrong audio path for Stemify specifically:
 
