@@ -33,7 +33,7 @@ from worker.models.demucs import (
     _weights_only_compat,
     resolve_device,
 )
-from worker.models.profiles import DRUMSEP_PROFILE, get_profile, validate_profile
+from worker.models.profiles import DRUMSEP_PROFILE, get_profile, resolve_quality, validate_profile
 
 if TYPE_CHECKING:  # pragma: no cover
     from worker.models.base import ModelProfile
@@ -152,6 +152,11 @@ def separate(
         )
 
     th = _import_torch()
+
+    # STEMIFY_QUALITY presets (docs/BENCHMARKS.md) override the profile's
+    # pinned inference settings at run time; balanced uses the pinned values.
+    _quality_name, quality_overlap, quality_shifts = resolve_quality()
+
     tensor: Any = None
     try:
         tensor = th.from_numpy(waveform.astype("float32")).to(resolved)[None]
@@ -164,9 +169,9 @@ def separate(
                 model,
                 tensor,
                 device=resolved,
-                shifts=profile.inference_shifts,
+                shifts=quality_shifts,
                 split=True,
-                overlap=profile.overlap,
+                overlap=quality_overlap,
                 segment=profile.chunk_length_seconds,
                 progress=False,
             )[0]

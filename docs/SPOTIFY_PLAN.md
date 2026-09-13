@@ -1,0 +1,146 @@
+# Spotify Input Pipeline — Design Plan (planning only, not implemented)
+
+Status: **PLAN** — no code in this document is implemented yet. This mirrors the
+shape of the YouTube plan (Task 14): a new source type flows into the same
+validate → separate → encode → package pipeline unchanged.
+
+## 1. Product goal
+
+A third source tab next to Upload and YouTube: paste a Spotify track/album/
+playlist link, Stemify resolves the real audio, and the normal separation job
+runs. The job page, ZIP naming, analysis, and downloads all work exactly as
+they do today because the pipeline downstream of "we have an audio file" is
+source-agnostic.
+
+## 2. The two halves: metadata vs audio
+
+Spotify is two completely different problems, and conflating them is the #1
+design mistake:
+
+| Concern | Source | Cost / auth | Terms |
+|---|---|---|---|
+| **Metadata** (title, artist, duration, artwork, ISRC, preview URL) | Official Spotify Web API via `spotipy` | Free developer app; client-credentials token | Public, documented, stable |
+| **Audio** (the actual Ogg Vorbis stream) | `librespot` (open-source Spotify client protocol) | Requires a **Premium** account login | Personal use; gray area — same posture as the YouTube feature's acknowledgement checkbox |
+
+Metadata is uncontroversial and free. Audio requires a Premium account and
+carries the same personal-use-only policy stance as YouTube input. The UI
+acknowledgement checkbox (already built for YouTube) is extended to cover
+Spotify.
+
+## 3. Architecture: a source-adapter interface
+
+The worker already branches on `source_type` (`upload` | `youtube`) in exactly
+one place — `job_loop.process_job`. Spotify adds `spotify` as a third value
+behind the same seam:
+
+```
+job.source_type == "spotify"
+    → spotify.py: resolve_link() → track IDs
+    → spotify.py: fetch_metadata() (spotipy; title/artist for naming)
+    → librespot_backend: stream audio to job temp dir (decode on the fly)
+    → falls into the existing prepare_source() validation ladder unchanged
+```
+
+New worker module `worker/worker/spotify.py`, deliberately shaped like
+`worker/worker/youtube.py`:
+
+- `is_allowed_spotify_url(url)` — allowlist: `open.spotify.com`,
+  `spotify.link`, `spotify:track:` URIs. Reject everything else.
+- `STEMIFY_SPOTIFY_ENABLED` kill switch, default **off** until the user
+  configures credentials (mirrors `STEMIFY_YOUTUBE_ENABLED`).
+- Fixed-argument subprocess/protocol calls; never shell; user config only from
+  the operator's own credentials file.
+- `resolve_title(url)`-style best-effort naming probe → `Artist - Title`, fed
+  into the existing `record_source_filename` naming path (roadmap A2 — the
+  naming work just landed for YouTube generalizes for free).
+
+## 4. Audio acquisition — librespot backend (the hard part)
+
+Spotify serves 96/160/320 kbps Ogg Vorbis. There is no official download API;
+the legitimate open-source path is librespot (Rust) or its Python port, which
+implement the Spotify client protocol and can render a track to a local file
+**when authenticated as a Premium account**.
+
+Options, in preference order:
+
+1. **librespot binary via subprocess** (like yt-dlp today): the worker shells
+   out to a `librespot` executable with fixed args
+   (`--backend pipe --format vorbis` → decode with ffmpeg). Pros: battle-tested
+   Rust implementation, no Python ABI headaches. Cons: user must install one
+   binary; we document where.
+2. **librespot-python**: pip-installable, but less maintained; keep as
+   fallback. Pros: `pip install`. Cons: fewer eyes, occasional protocol drift
+   after Spotify server changes.
+
+Either way the worker receives **Ogg Vorbis bytes**, decodes through the
+existing ffmpeg ladder (`prepare_source` already accepts whatever ffmpeg can
+decode), and everything downstream is identical.
+
+Credential handling (operator-side only, never per-job):
+- `STEMIFY_SPOTIFY_USERNAME` / `STEMIFY_SPOTIFY_PASSWORD` env vars, or a
+  `data/spotify-credentials.json` (gitignored) holding the librespot cached
+  credentials. The web app and database never see them.
+- Device name `stemify-worker`; librespot requires a registered "device".
+
+Anti-abuse guardrails (learned from the YouTube rollout):
+- One Spotify job at a time per worker (already true — single-job loop).
+- Same 100 MB upload-equivalent / 480 s duration caps after decode.
+- Rate-limit: minimum gap between Spotify fetches (`STEMIFY_SPOTIFY_COOLDOWN_S`,
+  default ~10 s) to avoid tripping account flags.
+- Playlist/album links expand to at most N tracks per job — v1 scope is
+  **single track**; batch queues are a follow-up that creates N normal jobs.
+
+## 5. Web app changes (small)
+
+- `source-picker.tsx`: third tab "Spotify link"; same acknowledgement checkbox
+  pattern as YouTube (personal use, ToS).
+- `lib/jobs.ts` + contracts: `source_type` gains `"spotify"`; URL allowlist
+  mirrors the worker's (defense in depth, same as YouTube).
+- `job-view.ts` / UI strings: "Spotify import" label; everything else
+  (progress stages, naming, analysis, ZIP) inherits automatically.
+- Status page shows "Resolving Spotify metadata → Streaming audio" stages via
+  the existing `progressMessage` mechanism (lands for free with the stage-aware
+  progress work).
+
+## 6. Failure modes and public error codes
+
+Reuses `DOWNLOAD_FAILED` with Spotify-specific public messages:
+
+| Failure | Public behavior |
+|---|---|
+| Feature disabled / no credentials | Job fails fast: "Spotify input is not configured on this machine." |
+| Not Premium / auth expired | "Spotify authentication failed. Check the worker's Spotify credentials." |
+| Track unavailable in market / removed | "That track is not available." |
+| Protocol/parse errors | Generic download-failed message; diagnostics in `job_events` only |
+
+## 7. Legal / policy posture (Section 14 parity)
+
+- Same personal-use-only stance as YouTube; acknowledgement checkbox required.
+- Web API metadata usage is fully compliant (documented public API).
+- Audio via librespot = the user's own Premium account streaming their own
+  library; we do not distribute credentials, bypass DRM beyond what the open
+  client library does, or enable redistribution. Keep model/checkpoint license
+  discipline unchanged.
+- README documents the posture; the kill switch stays default-off.
+
+## 8. Milestones
+
+| # | Deliverable | Tests |
+|---|---|---|
+| S1 | `spotify.py` URL allowlist + kill switch + metadata probe stubs | Pure unit tests (no network), mirroring `test_youtube.py` |
+| S2 | librespot subprocess backend with stubbed subprocess | Integration tests with a fake librespot writing a fixture Ogg |
+| S3 | `source_type="spotify"` end-to-end through `process_job` | Extend `test_youtube_integration.py` pattern |
+| S4 | Web: third tab, contracts, job-view labels | `createJob` allowlist tests + UI |
+| S5 | Real-credential verification pass + README operator guide | Manual, reference machine |
+
+S1–S4 are buildable and testable with zero Spotify access (subprocess stubs
+write fixture audio, exactly like the YouTube tests). S5 is the only step that
+needs a real Premium account, and it is a verification pass, not development.
+
+## 9. Explicit non-goals (v1)
+
+- Batch playlist separation (defer; create per-track jobs later)
+- 320 kbps toggle (librespot default quality is fine; separation resamples to
+  44.1 kHz canonical anyway)
+- Storing Spotify credentials in the web app or DB
+- Any redistribution of fetched audio

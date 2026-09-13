@@ -99,6 +99,34 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
     DRUMSEP_PROFILE.profile_id: DRUMSEP_PROFILE,
 }
 
+# STEMIFY_QUALITY presets (docs/BENCHMARKS.md): runtime inference settings that
+# override a profile's pinned overlap/shifts. The profile fields remain the
+# allowlisted "balanced" defaults; the preset is the operator's speed/quality
+# dial. Each extra shift is one more full inference pass (passes = shifts + 1),
+# and higher overlap adds chunks, so time grows roughly linearly with both.
+QUALITY_PRESETS: dict[str, tuple[float, int]] = {
+    "fast": (0.25, 0),  # demucs defaults: 1 pass, minimal stitching
+    "balanced": (0.4, 2),  # the tuned defaults from the 2026-09 quality pass
+    "best": (0.45, 5),  # 6 passes, tightest stitching
+}
+DEFAULT_QUALITY = "balanced"
+
+
+def resolve_quality() -> tuple[str, float, int]:
+    """Resolve STEMIFY_QUALITY to (preset_name, overlap, inference_shifts).
+
+    Mirrors resolve_device's strictness: an unknown value fails loudly with
+    MODEL_LOAD_FAILED instead of silently processing at a surprise quality.
+    """
+    raw = (os.environ.get("STEMIFY_QUALITY") or DEFAULT_QUALITY).strip().lower()
+    preset = QUALITY_PRESETS.get(raw)
+    if preset is None:
+        raise SeparationError(
+            ErrorCode.MODEL_LOAD_FAILED,
+            f"unknown STEMIFY_QUALITY {raw!r}; expected one of {sorted(QUALITY_PRESETS)}",
+        )
+    return raw, preset[0], preset[1]
+
 _VALID_MODES = frozenset({"vocals_instrumental", "full_stems", "drum_breakdown"})
 _VALID_DEVICES = frozenset({"auto", "cpu", "cuda"})
 _INSTRUMENTAL_POLICIES = frozenset({"mixture_minus_vocals", "direct_model_output"})

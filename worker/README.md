@@ -76,6 +76,21 @@ force one; forcing `cuda` without a CUDA device fails the job with
 CPU performance for full-length tracks is not yet benchmarked (plan Task 18);
 do not rely on it for production-length material yet.
 
+### Quality vs speed
+
+`STEMIFY_QUALITY=balanced` (default) tunes separation for cleaner stems.
+Presets, applied to every mode including drum subdivision:
+
+| Preset | overlap | shifts | Relative time | Use when |
+|---|---|---|---|---|
+| `fast` | 0.25 | 0 | ~0.35x | Quick previews, debugging |
+| `balanced` | 0.4 | 2 | 1x | Everyday use |
+| `best` | 0.45 | 5 | ~2.5x | Final renders, maximal fidelity |
+
+Set it once per worker run (e.g. `STEMIFY_QUALITY=fast python -m worker.job_loop`)
+or in `start.sh`; an unknown value fails the job with `MODEL_LOAD_FAILED`
+rather than silently processing at a surprise quality.
+
 ### FFmpeg
 
 The input pipeline needs `ffmpeg`/`ffprobe`. It looks for vendored static

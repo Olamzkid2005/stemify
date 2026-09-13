@@ -24,7 +24,12 @@ from typing import TYPE_CHECKING, Any
 
 from worker.errors import ErrorCode
 from worker.models.base import ModelProfile, SeparationError
-from worker.models.profiles import get_profile, get_profile_for_mode, validate_profile
+from worker.models.profiles import (
+    get_profile,
+    get_profile_for_mode,
+    resolve_quality,
+    validate_profile,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     import numpy as np
@@ -162,6 +167,10 @@ def separate(
     model, device = load_model(profile)
     th = _import_torch()
 
+    # STEMIFY_QUALITY presets (docs/BENCHMARKS.md) override the profile's
+    # pinned inference settings at run time; balanced uses the pinned values.
+    _quality_name, quality_overlap, quality_shifts = resolve_quality()
+
     tensor: Any = None
     try:
         tensor = th.from_numpy(waveform.astype("float32")).to(device)[None]  # (1, channels, samples)
@@ -174,9 +183,9 @@ def separate(
                 model,
                 tensor,
                 device=device,
-                shifts=profile.inference_shifts,
+                shifts=quality_shifts,
                 split=True,
-                overlap=profile.overlap,
+                overlap=quality_overlap,
                 segment=profile.chunk_length_seconds,
                 progress=False,
             )[0]  # (sources, channels, samples)

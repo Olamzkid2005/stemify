@@ -171,6 +171,7 @@ def _install_fake_engine(monkeypatch: pytest.MonkeyPatch, profile: Any) -> dict[
     def fake_apply_model(model: _FakeModel, tensor: Any, **kwargs: Any) -> Any:
         # The adapter hands us a (1, channels, samples) tensor wrapper; return
         # an object whose .cpu().numpy() yields the mixture for every source.
+        captured.update(kwargs)
         mixture = captured["mixture"]
         sources = len(model.sources)
 
@@ -252,6 +253,63 @@ def test_separate_vocals_instrumental_with_stub_engine(
     np.testing.assert_allclose(stems["vocals"] + stems["instrumental"], mixture, atol=1e-5)
     # Stage-boundary progress fired.
     assert calls == [0.0, 1.0]
+
+
+def test_resolve_quality_presets_and_unknown_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """STEMIFY_QUALITY resolves case-insensitively; an unknown value fails loudly."""
+    from worker.models.profiles import resolve_quality
+
+    monkeypatch.delenv("STEMIFY_QUALITY", raising=False)
+    assert resolve_quality() == ("balanced", 0.4, 2)
+    for name, overlap, shifts in (("fast", 0.25, 0), ("best", 0.45, 5)):
+        monkeypatch.setenv("STEMIFY_QUALITY", name.upper())
+        assert resolve_quality() == (name, overlap, shifts)
+    monkeypatch.setenv("STEMIFY_QUALITY", "insane")
+    with pytest.raises(SeparationError) as excinfo:
+        resolve_quality()
+    assert excinfo.value.code == ErrorCode.MODEL_LOAD_FAILED
+
+
+def test_quality_preset_reaches_inference(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """STEMIFY_QUALITY=fast lowers shifts/overlap at the apply_model call."""
+    import numpy as np
+
+    _clear_model_cache()
+    profile = get_profile(DEFAULT_PROFILE_ID)
+    monkeypatch.setenv("STEMIFY_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("STEMIFY_QUALITY", "fast")
+    captured = _install_fake_engine(monkeypatch, profile)
+
+    mixture = np.zeros((2, 100), dtype=np.float32)
+    captured["mixture"] = mixture
+    demucs_module.separate(mixture, profile, mode="vocals_instrumental")
+
+    assert captured["shifts"] == 0
+    assert captured["overlap"] == 0.25
+
+
+def test_quality_defaults_to_balanced_at_inference(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without STEMIFY_QUALITY, inference uses the balanced pinned settings."""
+    import numpy as np
+
+    _clear_model_cache()
+    profile = get_profile(DEFAULT_PROFILE_ID)
+    monkeypatch.setenv("STEMIFY_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("STEMIFY_QUALITY", raising=False)
+    captured = _install_fake_engine(monkeypatch, profile)
+
+    mixture = np.zeros((2, 100), dtype=np.float32)
+    captured["mixture"] = mixture
+    demucs_module.separate(mixture, profile, mode="vocals_instrumental")
+
+    assert captured["shifts"] == 2
+    assert captured["overlap"] == 0.4
 
 
 def test_separate_rejects_unsupported_mode() -> None:
