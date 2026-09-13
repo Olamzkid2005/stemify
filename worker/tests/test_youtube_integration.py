@@ -65,8 +65,17 @@ def stub_yt_dlp(monkeypatch: pytest.MonkeyPatch, media: Path) -> None:
         if isinstance(args, (list, tuple)) and "--no-playlist" in args:
             url_index = args.index("--") + 1
             _ = args[url_index]  # allowlist guarantees this is the validated URL
-            # Mirror the fixed template: %(id)s.%(ext)s inside the --paths dir.
-            dest_dir = Path(args[args.index("--paths") + 1])
+            dest_dir = Path(args[args.index("--paths") + 1]) if "--paths" in args else None
+            if dest_dir is None:
+                return _Completed()
+            # The worker first probes the title, then performs the download.
+            # Return a title only for the dump-single-json probe.
+            if "--dump-single-json" in args:
+                return type("_Completed", (), {
+                    "returncode": 0,
+                    "stderr": b"",
+                    "stdout": b'{"title":"Test Song"}',
+                })()
             (dest_dir / "abc123.mp3").write_bytes(media.read_bytes())
             return _Completed()
         return real_run(args, **kwargs)

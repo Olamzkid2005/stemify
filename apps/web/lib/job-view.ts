@@ -13,9 +13,9 @@ import { isTerminalStatus, type JobView } from "./job-view-types";
 
 const USER_STAGES: Record<string, string> = {
   starting: "Preparing audio",
-  downloading: "Preparing audio",
-  validating: "Analyzing track",
-  preparing_audio: "Analyzing track",
+  downloading: "Downloading audio",
+  validating: "Checking your audio",
+  preparing_audio: "Preparing audio",
   separating: "Separating stems",
   encoding: "Encoding files",
   uploading_results: "Preparing downloads",
@@ -24,11 +24,35 @@ const USER_STAGES: Record<string, string> = {
   completed: "Completed",
 };
 
+const DEFAULT_PROGRESS_MESSAGES: Record<string, string> = {
+  starting: "Starting the local worker",
+  downloading: "Downloading audio as MP3",
+  validating: "Validating the audio file",
+  preparing_audio: "Preparing audio for separation",
+  separating: "Running the separation model",
+  encoding: "Encoding the separated stem files",
+  packaging: "Building the ZIP and manifest",
+  cleanup: "Finishing up",
+  completed: "Your stems are ready",
+};
+
+
 export type { JobView };
 export { isTerminalStatus };
 
 function isoTime(value: number): string {
   return new Date(value).toISOString();
+}
+
+async function latestProgressMessage(jobId: string, stage: string | null): Promise<string | undefined> {
+  if (!stage) return undefined;
+  const event = db.get<{ detail: string | null }>(
+    "SELECT detail FROM job_events WHERE job_id = ? AND event_type = 'progress' " +
+      "AND stage = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+    jobId,
+    stage,
+  );
+  return event?.detail ?? undefined;
 }
 
 /**
@@ -76,13 +100,26 @@ export async function getJobView(jobId: string, ownerKey: string): Promise<JobVi
   );
   if (!job) return null;
 
+  const stage = job.stage ?? (job.status === "queued" ? "starting" : job.status);
+  const userStage = USER_STAGES[stage] ?? (job.status === "queued" ? "Preparing audio" : "Working");
+  const progressMessage =
+    (await latestProgressMessage(job.id, stage)) ??
+    (stage === "downloading"
+      ? job.progress >= 20
+        ? "MP3 downloaded; checking the audio"
+        : job.progress >= 12
+          ? "Downloading audio as MP3"
+          : "Checking the YouTube link"
+      : DEFAULT_PROGRESS_MESSAGES[stage] ?? "Working locally");
+
   const view: JobView = {
     jobId: job.id,
     status: job.status,
-    stage: job.stage ?? (job.status === "queued" ? "starting" : job.status),
-    userStage: USER_STAGES[job.stage ?? ""] ?? (job.status === "queued" ? "Preparing audio" : "Working"),
+    stage,
+    userStage,
+    progressMessage,
     progress: job.progress,
-    source: { filename: job.source_filename },
+    source: { type: job.source_type, filename: job.source_filename },
     mode: job.mode,
     outputFormat: job.output_format,
     createdAt: isoTime(job.created_at),

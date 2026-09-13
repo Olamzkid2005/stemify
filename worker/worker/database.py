@@ -267,22 +267,65 @@ class JobQueue:
         finally:
             cursor.close()
 
-    def update_progress(self, job_id: str, stage: Stage, progress: int) -> bool:
-        """Persist progress while processing; False once the job is no longer ours."""
+    def update_progress(
+        self,
+        job_id: str,
+        stage: Stage,
+        progress: int,
+        detail: str | None = None,
+    ) -> bool:
+        """Persist current stage/progress and a safe user-facing detail."""
+        bounded = max(0, min(100, int(progress)))
         cursor = self._connection.execute(
             "UPDATE jobs SET stage = ?, progress = ?, updated_at = ? "
             "WHERE id = ? AND status = 'processing'",
-            (stage.value, max(0, min(100, int(progress))), _now_ms(), job_id),
+            (stage.value, bounded, _now_ms(), job_id),
         )
+        if cursor.rowcount == 1 and detail:
+            self.record_event(job_id, "progress", detail, stage=stage, progress=bounded)
         return cursor.rowcount == 1
 
-    def record_event(self, job_id: str, event_type: str, detail: str) -> None:
-        """Append a diagnostic job_event (plan Section 12.1); best-effort only."""
+    def record_source_filename(self, job_id: str, filename: str) -> None:
+        """Store a resolved display name for the source (roadmap A2).
+
+        YouTube jobs arrive with source_filename NULL; the worker fills it with
+        the sanitized video title so downloads and ZIPs are named after the
+        song. Only running jobs are updated, and failures are swallowed: the
+        naming is cosmetic, the job must never fail because of it.
+        """
         try:
             self._connection.execute(
-                "INSERT INTO job_events (id, job_id, event_type, detail, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (f"evt_{_diagnostic_reference()}", job_id, event_type, detail, _now_ms()),
+                "UPDATE jobs SET source_filename = ?, updated_at = ? "
+                "WHERE id = ? AND status = 'processing'",
+                (filename, _now_ms(), job_id),
+            )
+        except Exception:  # noqa: BLE001, S110 - naming is cosmetic, never fatal
+            pass
+
+    def record_event(
+        self,
+        job_id: str,
+        event_type: str,
+        detail: str,
+        *,
+        stage: Stage | None = None,
+        progress: int | None = None,
+    ) -> None:
+        """Append a sanitized local event; diagnostics are best-effort only."""
+        try:
+            self._connection.execute(
+                "INSERT INTO job_events "
+                "(id, job_id, event_type, stage, progress, detail, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"evt_{_diagnostic_reference()}",
+                    job_id,
+                    event_type,
+                    stage.value if stage else None,
+                    progress,
+                    detail,
+                    _now_ms(),
+                ),
             )
         except Exception:  # noqa: BLE001, S110 - events are diagnostic, never fatal
             pass

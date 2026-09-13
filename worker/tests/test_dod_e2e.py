@@ -146,7 +146,12 @@ def test_full_local_workflow_end_to_end(seeded_job) -> None:
     # 2. The ZIP contains exactly the stems plus the manifest.
     zip_path = queue.data_dir / f"results/{job_id}/stems.zip"
     with zipfile.ZipFile(zip_path) as archive:
-        assert sorted(archive.namelist()) == ["instrumental.mp3", "manifest.json", "vocals.mp3"]
+        assert sorted(archive.namelist()) == [
+            "analysis.txt",
+            "manifest.json",
+            "song - Extracted Instrumental.mp3",
+            "song - Extracted Vocals.mp3",
+        ]
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest["separation"]["mode"] == "vocals_instrumental"
         stem_names = {stem["name"] for stem in manifest["output"]["stems"]}

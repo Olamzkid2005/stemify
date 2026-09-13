@@ -12,6 +12,7 @@ output must never make a job look completed).
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import zipfile
 from pathlib import Path
@@ -29,23 +30,24 @@ SCHEMA_PATH = (
 )
 
 MANIFEST_NAME = "manifest.json"
+ANALYSIS_NAME = "analysis.txt"
 ZIP_MIME_TYPE = "application/zip"
 ARCHIVE_STEM_KEY = "archive"  # reserved job_outputs.stem_key for the ZIP
 
 # Human-readable labels for the stem list (plan Section 7.4).
 STEM_LABELS: dict[str, str] = {
-    "vocals": "Vocals",
-    "instrumental": "Instrumental",
-    "drums": "Drums",
-    "bass": "Bass",
-    "other": "Other",
-    "guitar": "Guitar",
-    "piano": "Piano",
+    "vocals": "Extracted Vocals",
+    "instrumental": "Extracted Instrumental",
+    "drums": "Extracted Drums",
+    "bass": "Extracted Bass",
+    "other": "Extracted Other",
+    "guitar": "Extracted Guitar",
+    "piano": "Extracted Piano",
     # Drum subdivision (roadmap Phase B).
-    "drums_kick": "Kick",
-    "drums_snare": "Snare",
-    "drums_cymbals": "Cymbals",
-    "drums_toms": "Toms",
+    "drums_kick": "Extracted Kick",
+    "drums_snare": "Extracted Snare",
+    "drums_cymbals": "Extracted Cymbals",
+    "drums_toms": "Extracted Toms",
 }
 
 
@@ -115,7 +117,9 @@ def build_zip(stem_files: list[tuple[str, Path]], manifest: dict[str, Any], dest
 
     stem_files: ordered [(stem_key, encoded_file), ...]. The expected file
     extension comes from the manifest's output format, never from the files
-    themselves. All entry timestamps are zeroed for deterministic archives
+    themselves. Entries are named after the song (roadmap A2), e.g.
+    "Song - Extracted Vocals.mp3", so archives are self-explanatory once
+    extracted. All entry timestamps are zeroed for deterministic archives
     (plan acceptance: "ZIP contents are deterministic").
     """
     output_format = manifest.get("output", {}).get("format")
@@ -125,6 +129,7 @@ def build_zip(stem_files: list[tuple[str, Path]], manifest: dict[str, Any], dest
             ErrorCode.OUTPUT_VALIDATION_FAILED,
             f"manifest output format {output_format!r} is not encodable",
         )
+    song_base = _song_base(manifest)
 
     if dest.exists():
         dest.unlink()
@@ -138,12 +143,19 @@ def build_zip(stem_files: list[tuple[str, Path]], manifest: dict[str, Any], dest
                         f"stem file {path.name} does not match the selected format",
                     )
                 entry = zipfile.ZipInfo(
-                    f"{stem_key}.{expected_extension}", date_time=(1980, 1, 1, 0, 0, 0)
+                    f"{song_base} - {STEM_LABELS.get(stem_key, stem_key)}.{expected_extension}",
+                    date_time=(1980, 1, 1, 0, 0, 0),
                 )
                 entry.compress_type = zipfile.ZIP_DEFLATED
                 entry.external_attr = 0o644 << 16
                 with path.open("rb") as source, archive.open(entry, "w") as target:
                     shutil.copyfileobj(source, target, length=2**20)
+            analysis_text = _analysis_text(manifest)
+            if analysis_text is not None:
+                archive.writestr(
+                    zipfile.ZipInfo(ANALYSIS_NAME, date_time=(1980, 1, 1, 0, 0, 0)),
+                    analysis_text,
+                )
             archive.writestr(
                 zipfile.ZipInfo(MANIFEST_NAME, date_time=(1980, 1, 1, 0, 0, 0)),
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -159,6 +171,28 @@ def build_zip(stem_files: list[tuple[str, Path]], manifest: dict[str, Any], dest
         raise OutputError(
             ErrorCode.OUTPUT_ENCODING_FAILED, f"could not write results archive: {error}"
         ) from error
+
+
+def _song_base(manifest: dict[str, Any]) -> str:
+    """Sanitized song name used as the ZIP entry prefix ("Song - Vocals.mp3")."""
+    raw = str(manifest.get("source", {}).get("displayName") or "")
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", raw)
+    cleaned = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", cleaned).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()[:80].strip().rstrip(".")
+    return cleaned or "Stems"
+
+
+def _analysis_text(manifest: dict[str, Any]) -> str | None:
+    """Human-readable BPM/key summary for the archive, or None when absent."""
+    analysis = manifest.get("analysis")
+    if not isinstance(analysis, dict) or not analysis:
+        return None
+    lines = [f"BPM: {analysis.get('bpm')}"]
+    key = analysis.get("key")
+    camelot = analysis.get("camelot")
+    if key:
+        lines.append(f"Key: {key}" + (f" (Camelot {camelot})" if camelot else ""))
+    return "\n".join(lines) + "\n"
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> None:

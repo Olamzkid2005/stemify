@@ -12,6 +12,7 @@ from pathlib import Path
 
 from worker.database import JobQueue
 from worker.errors import ErrorCode
+from worker.stages import Stage
 
 
 def make_queue(tmp_path: Path) -> JobQueue:
@@ -86,6 +87,34 @@ def test_concurrent_claims_cannot_grab_the_same_job(tmp_path: Path) -> None:
     assert len(claimed) == 1, "two loops must never process one job twice"
     queue_a.close()
     queue_b.close()
+
+
+def test_progress_detail_is_persisted_as_a_safe_event(tmp_path: Path) -> None:
+    queue = make_queue(tmp_path)
+    insert_queued_job(queue.database_path)
+    job = queue.claim_next_queued_job()
+    assert job is not None
+
+    assert queue.update_progress(
+        job.id,
+        Stage.DOWNLOADING,
+        12,
+        detail="Downloading audio as MP3",
+    )
+
+    row = read_job_row(
+        queue.database_path,
+        job.id,
+        "stage, progress",
+    )
+    assert row == ("downloading", 12)
+    event = read_job_row(
+        queue.database_path,
+        job.id,
+        "(SELECT detail FROM job_events WHERE job_id = jobs.id ORDER BY created_at DESC LIMIT 1)",
+    )
+    assert event == ("Downloading audio as MP3",)
+    queue.close()
 
 
 def test_fail_job_sets_terminal_state_with_public_message(tmp_path: Path) -> None:

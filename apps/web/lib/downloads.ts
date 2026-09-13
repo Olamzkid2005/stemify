@@ -160,6 +160,40 @@ export function contentDispositionFilename(
 }
 
 /**
+ * Entry name inside a results archive: "Song - Vocals.mp3" (roadmap A2).
+ * Mirrors the worker's packaging so worker-built and custom-selection
+ * archives extract with the same naming. Falls back to "Stems" like the
+ * worker does when no source name is known.
+ */
+export function zipStemEntryName(
+  stemKey: string,
+  sourceFilename: string | null,
+  extension: string,
+): string {
+  const song = sanitizeFilenameBase(sourceFilename ?? "", 80) || "Stems";
+  const label = STEM_LABELS[stemKey] ?? stemKey;
+  return `${song} - ${label}.${extension}`;
+}
+
+/**
+ * Human-readable BPM/key summary embedded as analysis.txt in results
+ * archives (roadmap A2), matching the worker's format. Returns null when the
+ * manifest carries no analysis block (degraded run or drum-refinement job).
+ */
+export function analysisText(
+  analysis: unknown,
+): string | null {
+  if (typeof analysis !== "object" || analysis === null) return null;
+  const { bpm, key, camelot } = analysis as { bpm?: unknown; key?: unknown; camelot?: unknown };
+  if (typeof bpm !== "number" || !Number.isFinite(bpm) || bpm <= 0) return null;
+  const lines = [`BPM: ${Math.round(bpm)}`];
+  if (typeof key === "string" && key) {
+    lines.push(`Key: ${key}${typeof camelot === "string" && camelot ? ` (Camelot ${camelot})` : ""}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+/**
  * Parse a single-range header (RFC 9110 Section 14.1.2). Returns null for
  * absent/multi-range requests (serve the full body), "invalid" for bad or
  * unsatisfiable ranges (416), or the inclusive byte window.

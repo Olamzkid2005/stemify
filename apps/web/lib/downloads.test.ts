@@ -18,10 +18,12 @@ import { after, before, describe, it } from "node:test";
 import "../lib/test-env";
 import { closeDatabase, db } from "@/lib/db/client";
 import {
+  analysisText,
   contentDispositionFilename,
   parseDownloadRequest,
   parseSingleRange,
   resolveDownload,
+  zipStemEntryName,
 } from "@/lib/downloads";
 import { LocalStorage } from "@/lib/storage/local";
 import { __setStorageForTests } from "@/lib/storage";
@@ -140,6 +142,23 @@ describe("resolveDownload", () => {
   it("rejects stem keys outside the allowlist before any lookup", async () => {
     const result = await resolveDownload(COMPLETED, OWNER, { kind: "stem", stem: "archive" });
     assert.deepEqual(result, { ok: false, status: 400, error: "invalid_request" });
+  });
+});
+
+describe("archive naming and analysis", () => {
+  it("uses the same Extracted label for ZIP entries as individual downloads", () => {
+    assert.equal(
+      zipStemEntryName("drums", "Zaylevelten – Tease Me (Official Lyric Video).mp3", "mp3"),
+      "Zaylevelten – Tease Me (Official Lyric Video) - Extracted Drums.mp3",
+    );
+  });
+
+  it("formats BPM and key metadata for the archive", () => {
+    assert.equal(
+      analysisText({ bpm: 99.4, key: "F# minor", camelot: "11A" }),
+      "BPM: 99\nKey: F# minor (Camelot 11A)\n",
+    );
+    assert.equal(analysisText(undefined), null);
   });
 });
 

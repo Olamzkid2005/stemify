@@ -76,7 +76,7 @@ export async function POST(
   );
   if (existing) {
     return NextResponse.json(
-      { jobId: existing.id, status: existing.status, statusUrl: `/api/jobs/${existing.id}` },
+      { jobId: existing.id, status: existing.status, statusUrl: `/jobs/${existing.id}` },
       { status: 200 },
     );
   }
@@ -96,7 +96,7 @@ export async function POST(
   );
 
   return NextResponse.json(
-    { jobId: refineJobId, status: "queued", statusUrl: `/api/jobs/${refineJobId}` },
+    { jobId: refineJobId, status: "queued", statusUrl: `/jobs/${refineJobId}` },
     { status: 201 },
   );
 }

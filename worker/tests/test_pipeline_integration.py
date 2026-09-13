@@ -206,7 +206,12 @@ def test_full_pipeline_completes_a_job(tmp_path: Path, monkeypatch: pytest.Monke
 
     zip_path = queue.data_dir / f"results/{job_id}/stems.zip"
     with zipfile.ZipFile(zip_path) as archive:
-        assert sorted(archive.namelist()) == ["instrumental.mp3", "manifest.json", "vocals.mp3"]
+        assert sorted(archive.namelist()) == [
+            "analysis.txt",
+            "manifest.json",
+            "song - Extracted Instrumental.mp3",
+            "song - Extracted Vocals.mp3",
+        ]
     queue.close()
 
 

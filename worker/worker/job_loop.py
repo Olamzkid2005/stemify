@@ -34,7 +34,7 @@ from worker.pipeline import (
     run_separation_stage,
 )
 from worker.stages import Stage
-from worker.youtube import download_audio
+from worker.youtube import download_audio, resolve_title
 
 DEFAULT_POLL_MS = 500
 
@@ -66,6 +66,17 @@ def _graceful_shutdown() -> Iterator[None]:
         for sig, handler in previous.items():
             with contextlib.suppress(ValueError, OSError):
                 signal.signal(sig, handler)
+
+
+def _progress(
+    queue: JobQueue,
+    job_id: str,
+    stage: Stage,
+    progress: int,
+    detail: str,
+) -> None:
+    """Persist a concise user-facing explanation with each progress update."""
+    queue.update_progress(job_id, stage, progress, detail=detail)
 
 
 def _fail(queue: JobQueue, job_id: str, error: Exception, fallback: ErrorCode) -> None:
@@ -118,6 +129,7 @@ def _publish_outputs(queue: JobQueue, job: ClaimedJob, output_rows: list[dict], 
 def process_job(queue: JobQueue, job: ClaimedJob) -> None:
     """Run one attempt. Every path ends in a terminal or still-queued state."""
     job_output_dir = None
+    job_display_name: str | None = None
     try:
         staged: Path | None = None
         source: Path | None = None
@@ -139,12 +151,20 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
 
         with JobTempDir() as job_dir:
             if job.source_type == "youtube":
-                queue.update_progress(job.id, Stage.DOWNLOADING, 10)
+                _progress(queue, job.id, Stage.DOWNLOADING, 8, "Checking the YouTube link")
                 download_dir = job_dir / "download"
                 download_dir.mkdir()
+                # Roadmap A2: name the job after the song. The title probe is
+                # best-effort — on failure the job keeps the media filename.
+                title = resolve_title(job.source_url)
+                if title:
+                    job_display_name = f"{title}.mp3"
+                    queue.record_source_filename(job.id, job_display_name)
+                _progress(queue, job.id, Stage.DOWNLOADING, 12, "Downloading audio as MP3")
                 staged = download_audio(job.source_url, download_dir)
+                _progress(queue, job.id, Stage.DOWNLOADING, 20, "MP3 downloaded; checking the audio")
             else:
-                queue.update_progress(job.id, Stage.VALIDATING, 15)
+                _progress(queue, job.id, Stage.VALIDATING, 10, "Checking the uploaded file")
                 inbox = job_dir / "source"
                 inbox.mkdir()
                 staged = inbox / (job.source_filename or (source.name if source else "source"))
@@ -153,7 +173,10 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                 except OSError:  # filesystems without symlink support (e.g. Windows)
                     shutil.copy(source, staged)
 
-            queue.update_progress(job.id, Stage.PREPARING_AUDIO, 25)
+            if job.source_type != "youtube":
+                _progress(queue, job.id, Stage.VALIDATING, 15, "Validating the uploaded audio")
+
+            _progress(queue, job.id, Stage.PREPARING_AUDIO, 25, "Preparing audio for separation")
             # Refine jobs (roadmap Phase B) consume a worker-produced drum stem.
             # A WAV drums stem legitimately exceeds the 100 MB upload cap
             # (~4.7 min stereo), so the upload cap applies to user uploads
@@ -169,7 +192,15 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                 canonical_wav,
                 job_dir,
                 job.mode,
-                progress_callback=lambda stage, progress: queue.update_progress(job.id, stage, progress),
+                progress_callback=lambda stage, progress: _progress(
+                    queue,
+                    job.id,
+                    stage,
+                    progress,
+                    "Running the separation model"
+                    if progress < 75
+                    else "Separation complete; preparing stem files",
+                ),
                 cancellation_checker=_cancellation_checker(queue, job.id),
             )
             _raise_if_canceled(queue, job.id)
@@ -178,7 +209,9 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                 stems,
                 job_dir,
                 job.output_format,
-                progress_callback=lambda stage, progress: queue.update_progress(job.id, stage, progress),
+                progress_callback=lambda stage, progress: _progress(
+                    queue, job.id, stage, progress, "Encoding the separated stem files"
+                ),
             )
             _raise_if_canceled(queue, job.id)
 
@@ -208,6 +241,7 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                 output_format=job.output_format,
                 source_display_name=(
                     job.source_filename
+                    or job_display_name
                     or (source.name if source else staged.name if staged else "source")
                 ),
                 source_duration_seconds=probe.duration_seconds,
@@ -216,7 +250,9 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                 profile=profile,
                 expires_at_ms=job.expires_at,
                 analysis=analysis,
-                progress_callback=lambda stage, progress: queue.update_progress(job.id, stage, progress),
+                progress_callback=lambda stage, progress: _progress(
+                    queue, job.id, stage, progress, "Building the ZIP and manifest"
+                ),
             )
 
             job_output_dir = job_dir / "outputs"

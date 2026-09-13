@@ -10,10 +10,12 @@ import { NextResponse } from "next/server";
 import { getOrCreateGuestId } from "@/lib/auth/guest";
 import { db } from "@/lib/db/client";
 import {
+  analysisText,
   contentDispositionFilename,
   parseDownloadRequest,
   parseSingleRange,
   resolveDownload,
+  zipStemEntryName,
 } from "@/lib/downloads";
 import { getLocalStorage } from "@/lib/storage";
 import { parseStemSelection } from "@/lib/stem-selection";
@@ -158,6 +160,7 @@ async function buildCustomZipResponse(input: {
   }
   const manifest = JSON.parse(manifestRaw.toString("utf8")) as {
     output?: { format?: string; stems?: { name?: string }[] };
+    analysis?: unknown;
   };
   const format = manifest.output?.format;
   const extension = typeof format === "string" && /^[a-z0-9]{1,5}$/.test(format) ? format : null;
@@ -187,13 +190,25 @@ async function buildCustomZipResponse(input: {
   const storage = getLocalStorage();
   const stagedDir = await mkdtemp(path.join(tmpdir(), "stemify-custom-zip-"));
   const stagedArchive = path.join(stagedDir, "stems.zip");
+  // Entry naming mirrors the worker's archive (roadmap A2): song-named stems,
+  // then analysis.txt (when the manifest carries BPM/key), then the manifest.
+  const analysisSummary = analysisText(manifest.analysis);
   await writeZipArchive(stagedArchive, [
     ...input.outputs.map((outputRow) => ({
-      name: `${outputRow.stem_key}.${extension}`,
+      name: zipStemEntryName(outputRow.stem_key, input.sourceFilename, extension),
       kind: "file" as const,
       // relative_path is server-owned; objectPath re-checks containment.
       path: storage.objectPath(outputRow.relative_path),
     })),
+    ...(analysisSummary
+      ? [
+          {
+            name: "analysis.txt",
+            kind: "buffer" as const,
+            data: Buffer.from(analysisSummary, "utf8"),
+          },
+        ]
+      : []),
     {
       name: "manifest.json",
       kind: "buffer" as const,

@@ -13,11 +13,13 @@ import { useState } from "react";
 import { useJobPolling } from "@/hooks/use-job-polling";
 
 const STAGE_ORDER = [
-  "Preparing audio",
-  "Analyzing track",
-  "Separating stems",
-  "Encoding files",
-  "Preparing downloads",
+  { key: "starting", label: "Starting worker" },
+  { key: "downloading", label: "Downloading source" },
+  { key: "validating", label: "Checking audio" },
+  { key: "preparing_audio", label: "Preparing audio" },
+  { key: "separating", label: "Separating stems" },
+  { key: "encoding", label: "Encoding files" },
+  { key: "packaging", label: "Preparing downloads" },
 ];
 
 export default function JobPage() {
@@ -120,7 +122,11 @@ export default function JobPage() {
   }
 
   // Active: queued or processing.
-  const activeIndex = Math.max(0, STAGE_ORDER.indexOf(job.userStage));
+  const stages = job.source.type === "youtube" || job.stage === "downloading"
+    ? STAGE_ORDER
+    : STAGE_ORDER.filter((stage) => stage.key !== "downloading");
+  const stageIndex = stages.findIndex((stage) => stage.key === job.stage);
+  const activeIndex = stageIndex >= 0 ? stageIndex : 0;
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-grow flex-col items-center gap-8 px-4 py-10 text-center">
       <div className="space-y-3">
@@ -147,8 +153,36 @@ export default function JobPage() {
       </div>
 
       <p aria-live="polite" className="text-sm font-semibold text-zinc-100">
-        {job.userStage}
+        {job.progressMessage}
       </p>
+      <p className="text-xs text-zinc-500">
+        {job.source.type === "youtube" ? "YouTube import" : "Local upload"} · {job.userStage} · {job.mode === "full_stems" ? "6 stems" : job.mode === "drum_breakdown" ? "4 drum parts" : "2 stems"}
+      </p>
+
+      <div className="w-full space-y-2 text-left">
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-medium text-zinc-400">Current operation</span>
+          <span className="font-semibold text-purple-300">{job.progress}%</span>
+        </div>
+        <div
+          className="h-2 w-full overflow-hidden rounded-full bg-zinc-800"
+          role="progressbar"
+          aria-valuenow={job.progress}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={`${job.progressMessage}, ${job.progress} percent complete`}
+        >
+          <div
+            className="purple-gradient-btn h-full rounded-full transition-[width] duration-500"
+            style={{ width: `${job.progress}%` }}
+          />
+        </div>
+        <p className="text-xs leading-relaxed text-zinc-500">
+          Full Split uses the 6-stem model. After it completes, use
+          <strong className="mx-1 text-purple-300">Refine drums</strong>
+          to create Kick, Snare, Cymbals, and Toms.
+        </p>
+      </div>
 
       {job.workerRunning === false ? (
         <p
@@ -163,12 +197,12 @@ export default function JobPage() {
       ) : null}
 
       <ol className="w-full space-y-1.5 text-left" aria-label="Processing stages">
-        {STAGE_ORDER.map((stage, i) => {
+        {stages.map((stage, i) => {
           const done = i < activeIndex;
           const active = i === activeIndex;
           return (
             <li
-              key={stage}
+              key={stage.key}
               className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 text-sm transition ${
                 active
                   ? "border-purple-500/40 bg-[#16121f] font-semibold text-white"
@@ -188,7 +222,8 @@ export default function JobPage() {
               >
                 {done ? "✓" : i + 1}
               </span>
-              {stage}
+              <span className="flex-1">{stage.label}</span>
+              {active ? <span className="text-[11px] font-normal text-purple-300">{job.progress}%</span> : null}
             </li>
           );
         })}
@@ -232,7 +267,7 @@ function CompletedView({
         setRefineState("error");
         return;
       }
-      router.push(body.statusUrl ?? `/jobs/${body.jobId}`);
+      router.push(`/jobs/${body.jobId}`);
     } catch {
       setRefineState("error");
     }

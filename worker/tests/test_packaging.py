@@ -176,7 +176,7 @@ def test_zip_contains_stems_and_manifest(tmp_path: Path) -> None:
 
     with zipfile.ZipFile(dest) as archive:
         names = archive.namelist()
-        assert names == ["vocals.mp3", "instrumental.mp3", MANIFEST_NAME]
+        assert names == ["song - Extracted Vocals.mp3", "song - Extracted Instrumental.mp3", MANIFEST_NAME]
         embedded = json.loads(archive.read(MANIFEST_NAME))
         assert embedded["jobId"] == JOB_ID
         # Deterministic timestamps (plan acceptance).

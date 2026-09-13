@@ -8,8 +8,9 @@ export type JobView = {
   status: string;
   stage: string;
   userStage: string;
+  progressMessage: string;
   progress: number;
-  source: { filename: string | null };
+  source: { type: "upload" | "youtube"; filename: string | null };
   mode: string;
   outputFormat: string;
   createdAt: string;

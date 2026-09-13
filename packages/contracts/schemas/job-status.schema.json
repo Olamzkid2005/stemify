@@ -19,11 +19,13 @@
     "status": { "$ref": "common.schema.json#/$defs/jobStatus" },
     "stage": { "$ref": "common.schema.json#/$defs/jobStage" },
     "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "progressMessage": { "type": "string", "minLength": 1, "maxLength": 128 },
     "source": {
       "type": "object",
       "additionalProperties": false,
       "required": ["filename"],
       "properties": {
+        "type": { "enum": ["upload", "youtube"] },
         "filename": { "type": "string", "minLength": 1, "maxLength": 255 }
       }
     },

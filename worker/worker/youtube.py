@@ -18,7 +18,9 @@ restrictions; yt-dlp failures for such sources surface as DOWNLOAD_FAILED.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -35,6 +37,11 @@ DEFAULT_TIMEOUT_SECONDS = 300
 
 # yt-dlp writes these while a download is in flight; never treat them as media.
 _INCOMPLETE_SUFFIXES = (".part", ".temp", ".ytdl")
+
+# Download/display naming (roadmap A2): jobs are named after the song, so the
+# worker resolves the video title and stores it as the job's source filename.
+_FILENAME_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+_MAX_TITLE_CHARS = 80
 
 
 class DownloadError(InputAudioError):
@@ -79,6 +86,58 @@ def _timeout_seconds() -> int:
         return max(10, int(raw))
     except ValueError:
         return DEFAULT_TIMEOUT_SECONDS
+
+
+def sanitize_title(raw: str) -> str:
+    """Clean a video title for use as a display/download name.
+
+    Mirrors the web's filename sanitizer: filesystem-illegal characters become
+    spaces, whitespace collapses, and the result is capped. Non-ASCII is kept
+    (downloads travel with an RFC 5987 UTF-8 filename variant).
+    """
+    cleaned = _FILENAME_ILLEGAL.sub(" ", raw)
+    cleaned = " ".join(cleaned.split()).strip()
+    return cleaned[:_MAX_TITLE_CHARS].strip().rstrip(".")
+
+
+def resolve_title(url: str) -> str | None:
+    """Best-effort video title lookup for download naming (roadmap A2).
+
+    Runs one fixed-argument `yt-dlp --dump-single-json` probe against the same
+    allowlisted HTTPS URL the download uses (same policy surface: no shell, no
+    user options, `--` before the URL). Returns the sanitized title, or None
+    when yt-dlp is unavailable/fails or the title is unusable — naming then
+    falls back to the media filename without failing the job.
+    """
+    if not is_allowed_youtube_url(url) or not youtube_enabled():
+        return None
+    try:
+        command = yt_dlp_command()
+    except DownloadError:
+        return None
+    args = [
+        *command,
+        "--no-playlist",
+        "--no-warnings",
+        "--skip-download",
+        "--dump-single-json",
+        "--",
+        url,
+    ]
+    try:
+        proc = subprocess.run(args, capture_output=True, timeout=_timeout_seconds(), check=False)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    try:
+        info = json.loads(proc.stdout.decode(errors="replace"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    title = info.get("title") if isinstance(info, dict) else None
+    if not isinstance(title, str):
+        return None
+    return sanitize_title(title) or None
 
 
 def yt_dlp_command() -> list[str]:
