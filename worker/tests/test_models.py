@@ -34,8 +34,9 @@ def test_default_profile_is_allowlisted() -> None:
     validate_profile(profile)  # does not raise
     assert profile.model_id == "htdemucs"
     assert profile.model_stems == ("drums", "bass", "other", "vocals")
-    # Full-stem mode stays disabled until benchmarks pass (plan Section 4.3).
-    assert profile.supported_modes == ("vocals_instrumental",)
+    # The default 4-stem checkpoint serves both whole-track modes; the
+    # experimental 6-stem model is no longer allowlisted.
+    assert profile.supported_modes == ("vocals_instrumental", "full_stems")
 
 
 def test_unknown_profile_is_rejected() -> None:
@@ -44,20 +45,22 @@ def test_unknown_profile_is_rejected() -> None:
     assert excinfo.value.code == ErrorCode.MODEL_LOAD_FAILED
 
 
-def test_mode_resolves_profile_and_env_override_wins() -> None:
-    """full_stems resolves to the 6-stem profile, drum_breakdown to drumsep; an
-    explicit STEMIFY_MODEL_PROFILE that supports the mode still wins; the default
-    mode keeps the 4-stem profile."""
+def test_mode_resolves_profile_and_explicit_override_wins() -> None:
+    """Both whole-track modes use the default 4-stem profile, drum_breakdown
+    uses drumsep, and an explicit STEMIFY_MODEL_PROFILE that supports the mode
+    still wins."""
     from worker.models.profiles import get_profile_for_mode
 
-    assert get_profile_for_mode("full_stems").profile_id == "demucs_6s"
+    assert get_profile_for_mode("full_stems").profile_id == "demucs_default"
     assert get_profile_for_mode("vocals_instrumental").profile_id == "demucs_default"
     assert get_profile_for_mode("drum_breakdown").profile_id == "drumsep"
 
     monkeypatch = pytest.MonkeyPatch()
     try:
-        monkeypatch.setenv("STEMIFY_MODEL_PROFILE", "demucs_6s")
-        assert get_profile_for_mode("vocals_instrumental").profile_id == "demucs_6s"
+        monkeypatch.setenv("STEMIFY_MODEL_PROFILE", "drumsep")
+        # drumsep does not serve whole-track modes, so the mode's own profile wins.
+        assert get_profile_for_mode("vocals_instrumental").profile_id == "demucs_default"
+        assert get_profile_for_mode("drum_breakdown").profile_id == "drumsep"
     finally:
         monkeypatch.undo()
 
@@ -255,6 +258,32 @@ def test_separate_vocals_instrumental_with_stub_engine(
     assert calls == [0.0, 1.0]
 
 
+def test_separate_full_stems_returns_three_non_overlapping_stems(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """full_stems = drums, bass and the residual instrumental bed."""
+    import numpy as np
+
+    _clear_model_cache()
+    profile = get_profile(DEFAULT_PROFILE_ID)
+    monkeypatch.setenv("STEMIFY_DATA_DIR", str(tmp_path / "data"))
+    captured = _install_fake_engine(monkeypatch, profile)
+
+    mixture = np.zeros((2, 100), dtype=np.float32)
+    mixture[0, :10] = 0.5
+    captured["mixture"] = mixture
+    stems = demucs_module.separate(mixture, profile, mode="full_stems")
+
+    assert set(stems) == {"drums", "bass", "instrumental"}
+    # The stub returns the mixture for every model source, so each output is
+    # exactly that and the residual is mixture - vocals - drums - bass. This
+    # pins the adapter to deriving the bed from the other stems rather than
+    # copying a model output, and keeps all three outputs full length.
+    np.testing.assert_allclose(stems["drums"], mixture, atol=1e-6)
+    np.testing.assert_allclose(stems["bass"], mixture, atol=1e-6)
+    np.testing.assert_allclose(stems["instrumental"], -2.0 * mixture, atol=1e-6)
+
+
 def test_resolve_quality_presets_and_unknown_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -328,7 +357,7 @@ def test_separate_rejects_unsupported_mode() -> None:
     profile = get_profile(DEFAULT_PROFILE_ID)
     with pytest.raises(SeparationError) as excinfo:
         demucs_module.separate(
-            np.zeros((2, 100), dtype=np.float32), profile, mode="full_stems"
+            np.zeros((2, 100), dtype=np.float32), profile, mode="karaoke"
         )
     assert excinfo.value.code == ErrorCode.MODEL_LOAD_FAILED
 

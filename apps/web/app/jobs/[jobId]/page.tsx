@@ -156,7 +156,7 @@ export default function JobPage() {
         {job.progressMessage}
       </p>
       <p className="text-xs text-zinc-500">
-        {job.source.type === "youtube" ? "YouTube import" : "Local upload"} · {job.userStage} · {job.mode === "full_stems" ? "6 stems" : job.mode === "drum_breakdown" ? "4 drum parts" : "2 stems"}
+        {job.source.type === "youtube" ? "YouTube import" : "Local upload"} · {job.userStage} · {job.mode === "full_stems" ? "3 stems" : job.mode === "drum_breakdown" ? "4 drum parts" : "2 stems"}
       </p>
 
       <div className="w-full space-y-2 text-left">
@@ -178,7 +178,9 @@ export default function JobPage() {
           />
         </div>
         <p className="text-xs leading-relaxed text-zinc-500">
-          Full Split uses the 6-stem model. After it completes, use
+          Vocals &amp; Instrumental gives two files; Drums, Bass &amp;
+          Instrumental adds the rhythm section as separate stems. After either
+          completes, use
           <strong className="mx-1 text-purple-300">Refine drums</strong>
           to create Kick, Snare, Cymbals, and Toms.
         </p>
@@ -300,7 +302,7 @@ function CompletedView({
         </span>
         <span className="rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-400">
           {mode === "full_stems"
-            ? "Full split"
+            ? "Drums, bass & instrumental"
             : mode === "drum_breakdown"
               ? "Drums refined"
               : "Vocals & instrumental"}

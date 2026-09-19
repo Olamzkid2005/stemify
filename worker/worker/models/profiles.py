@@ -26,32 +26,10 @@ DEFAULT_PROFILE = ModelProfile(
     sample_rate=44100,
     channels=2,
     model_stems=("drums", "bass", "other", "vocals"),
-    # Full-stem mode is only enabled once Task 18 benchmarks pass on the
-    # supported local hardware (plan Sections 4.3, 18).
-    supported_modes=("vocals_instrumental",),
-    instrumental_policy="mixture_minus_vocals",
-    device_policy="auto",
-    chunk_length_seconds=None,  # model default segment
-    overlap=0.4,
-    inference_shifts=2,
-    precision="float32",
-    license_reference="MIT (facebookresearch/demucs), model weights MIT",
-)
-
-# htdemucs_6s (demucs 4.0.1 experimental 6-source variant): same hybrid-transformer
-# family as the default profile, adding real piano and guitar sources. Served
-# from the same dl.fbaipublicfiles.com root and loaded through torch.hub with
-# check_hash=True (checkpoint identity: hybrid_transformer/5c90dfd2-34c22ccb.th,
-# from demucs 4.0.1's demucs/remote/files.txt).
-SIX_STEM_PROFILE = ModelProfile(
-    profile_id="demucs_6s",
-    model_id="htdemucs_6s",
-    checkpoint_checksum="34c22ccb",
-    checkpoint_identifier="hybrid_transformer/5c90dfd2-34c22ccb.th",
-    revision="demucs==4.0.1",
-    sample_rate=44100,
-    channels=2,
-    model_stems=("drums", "bass", "other", "vocals", "guitar", "piano"),
+    # full_stems serves the non-vocal rhythm-section split (drums, bass and the
+    # residual instrumental bed) from this same checkpoint. The experimental
+    # htdemucs_6s variant was dropped: its guitar/piano sources were not
+    # accurate enough to ship, and the shared stems did not sound different.
     supported_modes=("vocals_instrumental", "full_stems"),
     instrumental_policy="mixture_minus_vocals",
     device_policy="auto",
@@ -95,7 +73,6 @@ DRUMSEP_PROFILE = ModelProfile(
 
 MODEL_PROFILES: dict[str, ModelProfile] = {
     DEFAULT_PROFILE.profile_id: DEFAULT_PROFILE,
-    SIX_STEM_PROFILE.profile_id: SIX_STEM_PROFILE,
     DRUMSEP_PROFILE.profile_id: DRUMSEP_PROFILE,
 }
 
@@ -163,7 +140,7 @@ def get_profile_for_mode(mode: str) -> ModelProfile:
     STEMIFY_MODEL_PROFILE stays an explicit override: when the selected profile
     supports the mode it is used. Otherwise the first allowlisted profile (in
     registration order) that supports the mode is chosen: vocals_instrumental
-    -> default 4-stem, full_stems -> 6-stem, drum_breakdown -> drumsep.
+    and full_stems -> the default 4-stem model, drum_breakdown -> drumsep.
     """
     selected = get_profile(os.environ.get("STEMIFY_MODEL_PROFILE", DEFAULT_PROFILE_ID))
     if mode in selected.supported_modes:

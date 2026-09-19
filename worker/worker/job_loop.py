@@ -275,8 +275,8 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
             from worker.models.profiles import get_profile_for_mode
 
             # The packaging profile must match the one separation used, so the
-            # manifest records the right model for the job's mode (e.g. the
-            # 6-stem profile for full_stems).
+            # manifest records the right model for the job's mode (the default
+            # 4-stem model for full_stems, drumsep for drum_breakdown).
             profile = get_profile_for_mode(job.mode)
             packaged = package_stage(
                 job_id=job.id,

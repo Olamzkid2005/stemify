@@ -31,6 +31,13 @@ training or fine-tuning models, processing beyond the 8-minute local limit.
 
 ## Phase A — 6-stem separation (piano + guitar)
 
+> **Superseded (2026-09).** The 6-stem model shipped and was then removed after
+> listening review: `htdemucs_6s`'s Guitar/Piano sources were not accurate
+> enough, and the stems it shares with the 4-source model sounded the same.
+> `full_stems` now means the 3-stem rhythm split (drums, bass, instrumental)
+> served by the default htdemucs checkpoint — see `docs/BENCHMARKS.md`,
+> "Decisions from evidence". This phase is kept as history.
+
 ### A1. Worker: add the `htdemucs_6s` model profile
 
 The allowlist pattern in `worker/worker/models/profiles.py` already exists; this

@@ -168,7 +168,9 @@ The separation engine lives behind `worker/worker/models/`:
 `demucs.py` (adapter). The rest of the worker never touches torch or Demucs
 tensors — it passes canonical stereo float32 waveforms in and receives named
 numpy stems out. In `vocals_instrumental` mode the instrumental stem is
-mixture minus vocals (fixed per-profile policy).
+mixture minus vocals (fixed per-profile policy); `full_stems` is the non-vocal
+rhythm split — drums, bass, and the residual instrumental bed — from the same
+htdemucs checkpoint, so the three outputs never overlap.
 
 ## Encoding and packaging (Task 10)
 

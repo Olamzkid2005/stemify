@@ -62,7 +62,8 @@ def run_separation_stage(
     Returns (stems, mixture): the mixture is kept for the analysis stage
     (roadmap Phase C), which needs the full waveform for key detection.
     Drum subdivision (roadmap Phase B) dispatches to the drumsep adapter, which
-    consumes the isolated drums stem as its "mixture".
+    consumes the isolated drums stem as its "mixture". `full_stems` is the
+    non-vocal rhythm-section split (drums, bass, instrumental).
     """
     from worker.input_audio import decode_to_waveform
 
@@ -194,7 +195,7 @@ def package_stage(
         model_id=profile.model_id,
         model_revision=profile.revision,
         mixture_consistency=profile.instrumental_policy == "mixture_minus_vocals"
-        and mode == "vocals_instrumental",
+        and mode in ("vocals_instrumental", "full_stems"),
         analysis=analysis,
     )
     write_manifest(manifest, job_dir / "outputs" / "manifest.json")

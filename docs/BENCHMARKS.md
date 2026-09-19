@@ -75,13 +75,16 @@ PYTHONPATH="$PWD/.runtime" STEMIFY_MODEL_DIR="$PWD/data/models" \
    is flat, so duration is bounded by patience, not RAM. Machines at least
    ~4x faster (any modern 8-core desktop) process a 480 s track in under
    10 minutes.
-2. **`full_stems` stays disabled.** htdemucs always computes all 4 sources
-   (a 4-source `apply_model` call costs the same ~4x realtime as the 2-stem
-   flow), so the extra cost of full-stem mode is encoding/validating four
-   stems instead of two — but the plan (Section 18) requires listening
-   evaluation (vocal bleed, artifacts, transient damage) before enabling it,
-   which synthesized-tone benchmarks cannot provide. Keep the gate until
-   quality review is done; revisit with real music fixtures (Task 18).
+2. **`full_stems` is the 3-stem rhythm split on the default model.** It
+   outputs Drums, Bass and the residual instrumental bed from the same
+   htdemucs checkpoint, so separation cost equals the 2-stem flow and only
+   encoding/validation differs. The experimental `htdemucs_6s` variant was
+   dropped after listening review: its Guitar and Piano sources were not
+   accurate enough to ship, and the stems it shares with the 4-source model
+   sounded the same. The remaining quality question is model-side, not
+   pass-count-side — stacking inference passes (`best`: 0.45 overlap / 5
+   shifts) cost ~2.5x the time for no audible gain, so it was removed in
+   favour of a `fast`/`balanced` choice.
 3. **CUDA remains auto-detected, never required.** `resolve_device` falls back
    to CPU cleanly, and a CPU-only build is fully functional (this entire
    benchmark ran without CUDA).

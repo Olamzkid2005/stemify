@@ -194,7 +194,7 @@ export function SourcePicker() {
             active={separationMode === "full_stems"}
             onClick={() => setSeparationMode("full_stems")}
           >
-            Full Split <span className="font-normal text-zinc-600">(6-stem)</span>
+            Drums, Bass &amp; Instrumental <span className="font-normal text-zinc-600">(3-stem)</span>
           </OptionButton>
         </div>
       </div>

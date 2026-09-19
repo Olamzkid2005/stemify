@@ -9,8 +9,9 @@ Inference policy (fixed for this adapter):
 - 4.0.1 apply_model exposes no per-chunk callback, so progress_callback fires
   at stage boundaries (0.0 before, 1.0 after) and cancellation is checked
   before and after inference. Coarse on purpose; see plan Section 13.1.
-- Instrumental policy per profile (demucs_default): mixture minus vocals,
-  which is mixture-consistent by construction.
+- Instrumental policy per profile (demucs_default): mixture minus vocals for
+  `vocals_instrumental`, and the residual (mixture minus vocals, drums, bass)
+  for `full_stems`; both are mixture-consistent by construction.
 """
 
 from __future__ import annotations
@@ -224,7 +225,15 @@ def separate(
         result["instrumental"] = waveform - stems["vocals"]  # mixture-consistent by construction
         _validate_stem(result["instrumental"], waveform, profile, np)
     else:  # full_stems
-        result.update(stems)
+        # Non-vocal rhythm-section split: drums and bass are the model's own
+        # stems, and the instrumental bed is the residual (mixture minus
+        # vocals/drums/bass), so the three outputs never overlap.
+        if profile.instrumental_policy != "mixture_minus_vocals":  # pragma: no cover - allowlisted
+            raise SeparationError(ErrorCode.INFERENCE_FAILED, "unknown instrumental policy")
+        for stem_name in ("drums", "bass"):
+            result[stem_name] = stems[stem_name]
+        result["instrumental"] = waveform - stems["vocals"] - stems["drums"] - stems["bass"]
+        _validate_stem(result["instrumental"], waveform, profile, np)
     return result
 
 
