@@ -292,9 +292,15 @@ def test_resolve_quality_presets_and_unknown_value(
 
     monkeypatch.delenv("STEMIFY_QUALITY", raising=False)
     assert resolve_quality() == ("balanced", 0.4, 2)
-    for name, overlap, shifts in (("fast", 0.25, 0), ("best", 0.45, 5)):
+    for name, overlap, shifts in (("fast", 0.25, 0), ("balanced", 0.4, 2)):
         monkeypatch.setenv("STEMIFY_QUALITY", name.upper())
         assert resolve_quality() == (name, overlap, shifts)
+    # The retired "best" preset must fail loudly rather than quietly run at
+    # some other quality (the strictness is deliberate).
+    monkeypatch.setenv("STEMIFY_QUALITY", "best")
+    with pytest.raises(SeparationError) as removed:
+        resolve_quality()
+    assert removed.value.code == ErrorCode.MODEL_LOAD_FAILED
     monkeypatch.setenv("STEMIFY_QUALITY", "insane")
     with pytest.raises(SeparationError) as excinfo:
         resolve_quality()
@@ -306,7 +312,7 @@ def test_explicit_job_quality_overrides_env(monkeypatch: pytest.MonkeyPatch) -> 
     from worker.models.profiles import resolve_quality
 
     monkeypatch.setenv("STEMIFY_QUALITY", "fast")
-    assert resolve_quality("best") == ("best", 0.45, 5)
+    assert resolve_quality("balanced") == ("balanced", 0.4, 2)
     # None falls back to the env var.
     assert resolve_quality(None) == ("fast", 0.25, 0)
 

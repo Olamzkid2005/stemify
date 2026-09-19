@@ -9,7 +9,7 @@ export const OUTPUT_FORMATS = ["mp3", "wav", "flac", "ogg", "m4a"] as const;
  * Per-job quality presets (STEMIFY_QUALITY values). The worker resolves them
  * to inference overlap/shifts; omitting quality uses the worker's default.
  */
-export const QUALITY_PRESETS = ["fast", "balanced", "best"] as const;
+export const QUALITY_PRESETS = ["fast", "balanced"] as const;
 export type QualityPreset = (typeof QUALITY_PRESETS)[number];
 
 /**

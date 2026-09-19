@@ -14,7 +14,7 @@ export type JobView = {
   mode: string;
   outputFormat: string;
   /** Per-job quality preset; absent when the job uses the worker default. */
-  quality?: "fast" | "balanced" | "best";
+  quality?: "fast" | "balanced";
   createdAt: string;
   updatedAt: string;
   // completed only:

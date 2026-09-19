@@ -124,7 +124,7 @@ export async function getJobView(jobId: string, ownerKey: string): Promise<JobVi
     source: { type: job.source_type, filename: job.source_filename },
     mode: job.mode,
     outputFormat: job.output_format,
-    ...(job.quality ? { quality: job.quality as "fast" | "balanced" | "best" } : {}),
+    ...(job.quality ? { quality: job.quality as "fast" | "balanced" } : {}),
     createdAt: isoTime(job.created_at),
     updatedAt: isoTime(job.updated_at),
   };

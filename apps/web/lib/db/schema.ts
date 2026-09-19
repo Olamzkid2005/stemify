@@ -11,7 +11,7 @@ export type SourceType = "upload" | "youtube";
 export type SeparationMode = "vocals_instrumental" | "full_stems" | "drum_breakdown";
 export type OutputFormat = "mp3" | "wav" | "flac" | "ogg" | "m4a";
 
-export type QualityPreset = "fast" | "balanced" | "best";
+export type QualityPreset = "fast" | "balanced";
 
 export type JobRow = {
   id: string;

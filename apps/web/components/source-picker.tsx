@@ -14,7 +14,6 @@ type QualityPreset = (typeof QUALITY_PRESETS)[number];
 const QUALITY_OPTIONS: { value: QualityPreset; label: string; hint: string }[] = [
   { value: "fast", label: "Fast", hint: "quickest, rougher edges" },
   { value: "balanced", label: "Balanced", hint: "recommended" },
-  { value: "best", label: "Best", hint: "slowest, cleanest stems" },
 ];
 
 type SourceTab = "upload" | "youtube";

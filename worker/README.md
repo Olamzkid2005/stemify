@@ -85,11 +85,15 @@ Presets, applied to every mode including drum subdivision:
 |---|---|---|---|---|
 | `fast` | 0.25 | 0 | ~0.35x | Quick previews, debugging |
 | `balanced` | 0.4 | 2 | 1x | Everyday use |
-| `best` | 0.45 | 5 | ~2.5x | Final renders, maximal fidelity |
+
+A third `best` preset (0.45 overlap, 5 shifts, ~2.5x) was dropped: the extra
+passes changed processing time far more than the result, so it was not worth
+offering. Real quality gains need a different model, not more passes.
 
 Set it once per worker run (e.g. `STEMIFY_QUALITY=fast python -m worker.job_loop`)
-or in `start.sh`; an unknown value fails the job with `MODEL_LOAD_FAILED`
-rather than silently processing at a surprise quality.
+or in `start.sh`; the web UI can also set it per job (the job's preset wins).
+An unknown value fails the job with `MODEL_LOAD_FAILED` rather than silently
+processing at a surprise quality.
 
 ### FFmpeg
 

@@ -13,7 +13,7 @@
       "enum": ["mp3", "wav", "flac", "ogg", "m4a"]
     },
     "qualityPreset": {
-      "enum": ["fast", "balanced", "best"]
+      "enum": ["fast", "balanced"]
     },
     "jobStatus": {
       "enum": [

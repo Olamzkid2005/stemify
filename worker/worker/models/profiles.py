@@ -81,10 +81,12 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
 # allowlisted "balanced" defaults; the preset is the operator's speed/quality
 # dial. Each extra shift is one more full inference pass (passes = shifts + 1),
 # and higher overlap adds chunks, so time grows roughly linearly with both.
+# A third "best" preset (0.45/5) was dropped after listening review: the extra
+# passes changed processing time far more than the result, so it was not worth
+# offering. Real quality gains need a different model, not more passes.
 QUALITY_PRESETS: dict[str, tuple[float, int]] = {
     "fast": (0.25, 0),  # demucs defaults: 1 pass, minimal stitching
     "balanced": (0.4, 2),  # the tuned defaults from the 2026-09 quality pass
-    "best": (0.45, 5),  # 6 passes, tightest stitching
 }
 DEFAULT_QUALITY = "balanced"
 

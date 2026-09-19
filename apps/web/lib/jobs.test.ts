@@ -114,7 +114,7 @@ describe("createJob", () => {
   it("persists the chosen quality preset on the created job", async () => {
     const body = {
       ...structuredClone(validBody),
-      quality: "best",
+      quality: "balanced",
       idempotencyKey: "client-key-quality-0000001",
     } as typeof validBody & { quality: string };
     const result = await createJob({ ownerKey: OWNER, body });
@@ -124,7 +124,7 @@ describe("createJob", () => {
       "SELECT quality FROM jobs WHERE id = ?",
       result.job.id,
     );
-    assert.equal(row?.quality, "best");
+    assert.equal(row?.quality, "balanced");
   });
 
   it("rejects an unknown quality preset", async () => {
