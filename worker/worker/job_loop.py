@@ -19,7 +19,7 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from worker.database import ClaimedJob, JobQueue
@@ -79,13 +79,47 @@ def _progress(
     queue.update_progress(job_id, stage, progress, detail=detail)
 
 
-def _fail(queue: JobQueue, job_id: str, error: Exception, fallback: ErrorCode) -> None:
-    """Map any pipeline error to a terminal failed state with a safe message."""
-    if isinstance(error, (InputAudioError, SeparationError, OutputError)):
-        code = error.code
-    else:
-        code = fallback
-    queue.fail_job(job_id, code, _public_message(code))
+# A YouTube download owns this slice of the DOWNLOADING stage. One event per
+# whole percent keeps job_events small while the job page still shows the
+# download moving (a full-length song used to sit at one frozen percentage).
+_DOWNLOAD_START = 12
+_DOWNLOAD_END = 24
+
+
+def _download_progress(queue: JobQueue, job_id: str) -> Callable[[float], None]:
+    """Map yt-dlp's download percentage onto the job's DOWNLOADING progress."""
+    state = {"value": _DOWNLOAD_START}
+
+    def report(percent: float) -> None:
+        bounded = max(0.0, min(100.0, percent))
+        span = _DOWNLOAD_END - _DOWNLOAD_START
+        value = _DOWNLOAD_START + round(bounded / 100 * span)
+        # yt-dlp can restart a format and report a lower percentage; progress
+        # must never move backwards for the user.
+        if value <= state["value"]:
+            return
+        state["value"] = value
+        _progress(
+            queue,
+            job_id,
+            Stage.DOWNLOADING,
+            value,
+            f"Downloading audio as MP3 — {int(bounded)}%",
+        )
+
+    return report
+
+
+def _record_failure(queue: JobQueue, job: ClaimedJob, code: ErrorCode, error: Exception) -> None:
+    """Fail one job: safe public message, local detail, code-only log line.
+
+    The exact detail (yt-dlp's stderr, for example, which names the source and
+    can carry filesystem paths) is appended to job_events for local debugging
+    only. Neither the browser nor this console ever shows it (plan 13.6).
+    """
+    queue.record_event(job.id, "failure_detail", f"{code.value}: {error}")
+    print(f"worker: job {job.id} failed with {code.value}", flush=True)
+    queue.fail_job(job.id, code, _public_message(code))
 
 
 def _cancellation_checker(queue: JobQueue, job_id: str):
@@ -161,8 +195,18 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                     job_display_name = f"{title}.mp3"
                     queue.record_source_filename(job.id, job_display_name)
                 _progress(queue, job.id, Stage.DOWNLOADING, 12, "Downloading audio as MP3")
-                staged = download_audio(job.source_url, download_dir)
-                _progress(queue, job.id, Stage.DOWNLOADING, 20, "MP3 downloaded; checking the audio")
+                staged = download_audio(
+                    job.source_url,
+                    download_dir,
+                    progress_callback=_download_progress(queue, job.id),
+                )
+                _progress(
+                    queue,
+                    job.id,
+                    Stage.DOWNLOADING,
+                    24,
+                    "MP3 downloaded; checking the audio",
+                )
             else:
                 _progress(queue, job.id, Stage.VALIDATING, 10, "Checking the uploaded file")
                 inbox = job_dir / "source"
@@ -262,16 +306,16 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
         if queue.complete_job(job.id):
             print(f"worker: job {job.id} completed", flush=True)
     except InputAudioError as error:
-        queue.fail_job(job.id, error.code, _public_message(error.code))
+        _record_failure(queue, job, error.code, error)
     except SeparationError as error:
         if error.code == ErrorCode.CANCELED:
             queue.cancel_processing_job(job.id)
         else:
-            queue.fail_job(job.id, error.code, _public_message(error.code))
+            _record_failure(queue, job, error.code, error)
     except OutputError as error:
-        queue.fail_job(job.id, error.code, _public_message(error.code))
-    except Exception:  # noqa: BLE001 - deliberate catch-all: any unexpected error must end the job as UNKNOWN, never leave it processing
-        queue.fail_job(job.id, ErrorCode.UNKNOWN, _public_message(ErrorCode.UNKNOWN))
+        _record_failure(queue, job, error.code, error)
+    except Exception as error:  # noqa: BLE001 - deliberate catch-all: any unexpected error must end the job as UNKNOWN, never leave it processing
+        _record_failure(queue, job, ErrorCode.UNKNOWN, error)
 
 
 def _public_message(code: ErrorCode) -> str:

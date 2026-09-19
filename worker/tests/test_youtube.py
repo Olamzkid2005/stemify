@@ -9,8 +9,11 @@ stubbed, and the happy path validates a real local MP3 through the real
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -32,32 +35,29 @@ VALID_URL = "https://www.youtube.com/watch?v=abc123"
 def stub_yt_dlp_subprocess(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
     """Intercept yt-dlp invocations only; ffprobe/ffmpeg calls stay real.
 
-    Patching `worker.youtube.subprocess.run` mutates the *shared* subprocess
-    module object (input_audio imports the same one), so the fake must delegate
-    non-yt-dlp commands to `run` saved before the patch.
+    `_run_yt_dlp` is the module's single seam for launching yt-dlp, and it is
+    patched on `worker.youtube` alone — the shared `subprocess` module is left
+    untouched, so `validate_source` still runs the real ffprobe/ffmpeg ladder.
     """
-    real_run = subprocess.run
     real_which = shutil.which
-
-    def selective_run(args: Any, **kwargs: Any) -> Any:
-        if isinstance(args, (list, tuple)) and "--no-playlist" in args:
-            return handler(args, **kwargs)
-        return real_run(args, **kwargs)  # function object captured pre-patch
 
     def selective_which(name: str, *args: Any, **kwargs: Any) -> Any:
         # Only yt-dlp is faked: ffprobe/ffmpeg must resolve for real, because
         # shutil is a shared module and validate_source needs the real tools.
         return "yt-dlp" if name == "yt-dlp" else real_which(name, *args, **kwargs)
 
+    def fake_run(args: Any, *, timeout_seconds: int, on_progress: Any = None) -> Any:
+        return handler(args, on_progress=on_progress)
+
     monkeypatch.setattr("worker.youtube.shutil.which", selective_which)
-    monkeypatch.setattr("worker.youtube.subprocess.run", selective_run)
+    monkeypatch.setattr("worker.youtube._run_yt_dlp", fake_run)
 
 
-class _Completed:
-    def __init__(self, returncode: int = 0, stderr: bytes = b"") -> None:
-        self.returncode = returncode
-        self.stderr = stderr
-        self.stdout = b""
+def _result(returncode: int = 0, stdout: str = "", stderr: str = "") -> Any:
+    """Build the result object the real runner returns."""
+    from worker.youtube import _YtDlpResult
+
+    return _YtDlpResult(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +152,8 @@ def test_download_uses_fixed_arguments(
     """One video, audio-only, fixed size cap, `--` before the URL, no shell."""
     captured: dict[str, Any] = {}
 
-    def handler(args: Any, **kwargs: Any) -> _Completed:
+    def handler(args: Any, on_progress: Any = None) -> Any:
         captured["args"] = args
-        captured["kwargs"] = kwargs
         # A real decodable MP3 (the mp3 header matters to ffprobe downstream).
         subprocess.run(
             [
@@ -166,7 +165,7 @@ def test_download_uses_fixed_arguments(
             check=True,
             capture_output=True,
         )
-        return _Completed(0)
+        return _result(0)
 
     stub_yt_dlp_subprocess(monkeypatch, handler)
 
@@ -182,10 +181,32 @@ def test_download_uses_fixed_arguments(
     assert "--extract-audio" in args
     assert "--" in args
     assert args[-1] == VALID_URL  # URL comes last, after `--`
-    assert captured["kwargs"].get("shell") is not True  # never a shell command
     from worker.input_audio import MAX_FILE_BYTES
 
     assert str(MAX_FILE_BYTES) in args  # size cap is passed to yt-dlp
+
+
+def test_spawn_uses_isolated_process_group_and_no_shell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The child must be killable as a tree and never run through a shell."""
+    from worker.youtube import _spawn_yt_dlp
+
+    captured: dict[str, Any] = {}
+
+    class _FakePopen:
+        def __init__(self, args: Any, **kwargs: Any) -> None:
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("worker.youtube.subprocess.Popen", _FakePopen)
+    _spawn_yt_dlp(["yt-dlp", "--version"])
+
+    assert captured["kwargs"]["shell"] is False
+    if os.name == "nt":
+        assert captured["kwargs"]["creationflags"] == subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        assert captured["kwargs"]["start_new_session"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -197,9 +218,9 @@ def test_disallowed_url_fails_without_spawning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def explode(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("subprocess must not run for disallowed URLs")
+        raise AssertionError("yt-dlp must not run for disallowed URLs")
 
-    monkeypatch.setattr("worker.youtube.subprocess.run", explode)
+    monkeypatch.setattr("worker.youtube._run_yt_dlp", explode)
     with pytest.raises(DownloadError) as excinfo:
         download_audio("https://evil.example.com/watch?v=x", tmp_path)
     assert excinfo.value.code == ErrorCode.DOWNLOAD_FAILED
@@ -207,32 +228,102 @@ def test_disallowed_url_fails_without_spawning(
 
 def test_nonzero_exit_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stub_yt_dlp_subprocess(
-        monkeypatch, lambda *a, **k: _Completed(1, b"Video unavailable")
+        monkeypatch, lambda *a, **k: _result(1, stderr="Video unavailable")
     )
     with pytest.raises(DownloadError) as excinfo:
         download_audio(VALID_URL, tmp_path)
     assert excinfo.value.code == ErrorCode.DOWNLOAD_FAILED
 
 
-def test_timeout_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def hang(*args: Any, **kwargs: Any) -> None:
-        raise subprocess.TimeoutExpired(cmd="yt-dlp", timeout=1)
+# ---------------------------------------------------------------------------
+# Hard timeout and process-tree kill
+# ---------------------------------------------------------------------------
 
-    stub_yt_dlp_subprocess(monkeypatch, hang)
+
+def test_run_yt_dlp_kills_process_tree_on_timeout() -> None:
+    """A timed-out yt-dlp must not leave a grandchild holding the pipes.
+
+    The download runs ffmpeg as a child of yt-dlp. Killing only the parent left
+    ffmpeg alive holding the inherited stdout/stderr pipes, and the reader then
+    blocked forever — the worker looked hung while its heartbeat stayed fresh.
+    """
+    from worker.youtube import _run_yt_dlp
+
+    child = "import time; time.sleep(120)"
+    script = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "time.sleep(120)"
+    )
+    started = time.monotonic()
     with pytest.raises(DownloadError) as excinfo:
-        download_audio(VALID_URL, tmp_path)
+        _run_yt_dlp([sys.executable, "-c", script], timeout_seconds=10)
+    elapsed = time.monotonic() - started
+
     assert excinfo.value.code == ErrorCode.DOWNLOAD_FAILED
+    assert "timeout" in str(excinfo.value)
+    # The point of the test: it returns promptly instead of blocking forever.
+    assert elapsed < 60
+
+
+def test_run_yt_dlp_streams_download_progress() -> None:
+    """Progress lines reach the callback while the process runs."""
+    from worker.youtube import _run_yt_dlp
+
+    script = (
+        "print('[download]   0.0% of 1MiB'); "
+        "print('[download]  50.0% of 1MiB'); "
+        "print('[download] 100.0% of 1MiB')"
+    )
+    seen: list[float] = []
+    result = _run_yt_dlp(
+        [sys.executable, "-c", script], timeout_seconds=30, on_progress=seen.append
+    )
+
+    assert result.returncode == 0
+    assert seen == [0.0, 50.0, 100.0]
+
+
+def test_run_yt_dlp_buffers_stderr_and_exit_code() -> None:
+    from worker.youtube import _run_yt_dlp
+
+    result = _run_yt_dlp(
+        [sys.executable, "-c", "import sys; print('boom', file=sys.stderr); sys.exit(3)"],
+        timeout_seconds=30,
+    )
+
+    assert result.returncode == 3
+    assert "boom" in result.stderr
+
+
+def test_download_forwards_progress_callback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """yt-dlp's download percent reaches the worker's progress callback."""
+    seen: list[float] = []
+
+    def handler(args: Any, on_progress: Any = None) -> Any:
+        on_progress(42.0)
+        (tmp_path / "abc123.mp3").write_bytes(b"not audio")
+        return _result(0)
+
+    stub_yt_dlp_subprocess(monkeypatch, handler)
+    # The junk file still fails the real validation ladder, but only after the
+    # progress callback has been forwarded.
+    with pytest.raises(InputAudioError):
+        download_audio(VALID_URL, tmp_path, progress_callback=seen.append)
+    assert seen == [42.0]
 
 
 def test_zero_or_multiple_files_fail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    stub_yt_dlp_subprocess(monkeypatch, lambda *a, **k: _Completed(0))  # creates nothing
+    stub_yt_dlp_subprocess(monkeypatch, lambda *a, **k: _result(0))  # creates nothing
     with pytest.raises(DownloadError):
         download_audio(VALID_URL, tmp_path)
 
-    def two_files(*args: Any, **kwargs: Any) -> _Completed:
+    def two_files(*args: Any, **kwargs: Any) -> Any:
         (tmp_path / "a.mp3").write_bytes(b"m")
         (tmp_path / "b.mp3").write_bytes(b"m")
-        return _Completed(0)
+        return _result(0)
 
     stub_yt_dlp_subprocess(monkeypatch, two_files)
     with pytest.raises(DownloadError):
@@ -241,7 +332,7 @@ def test_zero_or_multiple_files_fail(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 def test_part_files_are_not_media(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A .part leftover must not satisfy the exactly-one-media check."""
-    stub_yt_dlp_subprocess(monkeypatch, lambda *a, **k: _Completed(0))
+    stub_yt_dlp_subprocess(monkeypatch, lambda *a, **k: _result(0))
     (tmp_path / "abc.mp3.part").write_bytes(b"m")
     with pytest.raises(DownloadError):
         download_audio(VALID_URL, tmp_path)
@@ -259,7 +350,7 @@ def test_happy_path_validates_media(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     except Exception:  # noqa: BLE001
         pytest.skip("ffmpeg not available")
 
-    def make_tone(args: Any, **kwargs: Any) -> _Completed:
+    def make_tone(args: Any, on_progress: Any = None) -> Any:
         # Create the media file the fake yt-dlp invocation would have produced.
         subprocess.run(
             [
@@ -271,7 +362,7 @@ def test_happy_path_validates_media(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             check=True,
             capture_output=True,
         )
-        return _Completed(0)
+        return _result(0)
 
     stub_yt_dlp_subprocess(monkeypatch, make_tone)
 
@@ -285,11 +376,11 @@ def test_happy_path_rejects_oversize_media(
 ) -> None:
     """Even if yt-dlp overshoots its own cap, validate_source stops it."""
 
-    def oversize(args: Any, **kwargs: Any) -> _Completed:
+    def oversize(args: Any, on_progress: Any = None) -> Any:
         from worker.input_audio import MAX_FILE_BYTES
 
         (tmp_path / "big.mp3").write_bytes(b"\0" * (MAX_FILE_BYTES + 1))
-        return _Completed(0)
+        return _result(0)
 
     stub_yt_dlp_subprocess(monkeypatch, oversize)
     # validate_source raises the InputAudioError parent (LIMIT_EXCEEDED),

@@ -45,40 +45,27 @@ def seed_youtube_job(
 
 
 def stub_yt_dlp(monkeypatch: pytest.MonkeyPatch, media: Path) -> None:
-    """Replace the yt-dlp subprocess with a copy of a real media file.
+    """Replace the yt-dlp runner with a copy of a real media file.
 
-    Only yt-dlp-style invocations (identified by the fixed --no-playlist flag)
-    are intercepted; ffprobe/ffmpeg calls stay real.
+    `worker.youtube._run_yt_dlp` is the single seam for launching yt-dlp, so
+    patching it leaves the shared `subprocess` module alone: ffprobe/ffmpeg
+    still run for real and so does the validation ladder.
     """
     import shutil as shutil_module
-    import subprocess as subprocess_module
 
-    real_run = subprocess_module.run
+    from worker.youtube import _YtDlpResult
+
     real_which = shutil_module.which
 
-    def fake_run(args: Any, **kwargs: Any) -> Any:
-        class _Completed:
-            returncode = 0
-            stderr = b""
-            stdout = b""
-
-        if isinstance(args, (list, tuple)) and "--no-playlist" in args:
-            url_index = args.index("--") + 1
-            _ = args[url_index]  # allowlist guarantees this is the validated URL
-            dest_dir = Path(args[args.index("--paths") + 1]) if "--paths" in args else None
-            if dest_dir is None:
-                return _Completed()
-            # The worker first probes the title, then performs the download.
-            # Return a title only for the dump-single-json probe.
-            if "--dump-single-json" in args:
-                return type("_Completed", (), {
-                    "returncode": 0,
-                    "stderr": b"",
-                    "stdout": b'{"title":"Test Song"}',
-                })()
-            (dest_dir / "abc123.mp3").write_bytes(media.read_bytes())
-            return _Completed()
-        return real_run(args, **kwargs)
+    def fake_run(args: Any, *, timeout_seconds: int, on_progress: Any = None) -> Any:
+        # The worker first probes the title, then performs the download.
+        if "--dump-single-json" in args:
+            return _YtDlpResult(0, '{"title":"Test Song"}', "")
+        dest_dir = Path(args[args.index("--paths") + 1])
+        if on_progress is not None:
+            on_progress(50.0)
+        (dest_dir / "abc123.mp3").write_bytes(media.read_bytes())
+        return _YtDlpResult(0, "", "")
 
     def selective_which(name: str, *args: Any, **kwargs: Any) -> Any:
         # Fake only yt-dlp; ffprobe/ffmpeg must resolve for real because
@@ -86,7 +73,7 @@ def stub_yt_dlp(monkeypatch: pytest.MonkeyPatch, media: Path) -> None:
         return "yt-dlp" if name == "yt-dlp" else real_which(name, *args, **kwargs)
 
     monkeypatch.setattr("worker.youtube.shutil.which", selective_which)
-    monkeypatch.setattr("worker.youtube.subprocess.run", fake_run)
+    monkeypatch.setattr("worker.youtube._run_yt_dlp", fake_run)
 
 
 def test_youtube_job_completes_end_to_end(

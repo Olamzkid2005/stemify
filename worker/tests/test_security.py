@@ -43,10 +43,20 @@ def _iter_subprocess_calls() -> list[tuple[Path, ast.Call]]:
 
 def test_every_subprocess_call_uses_a_timeout() -> None:
     calls = _iter_subprocess_calls()
-    assert len(calls) >= 4  # ffprobe, ffmpeg decode, encoder, yt-dlp
+    assert len(calls) >= 5  # ffprobe, ffmpeg decode, encoder, yt-dlp spawn + kill
     for path, node in calls:
         keywords = {kw.arg for kw in node.keywords if kw.arg}
-        assert "timeout" in keywords, f"{path.name}: subprocess call without timeout"
+        if "timeout" in keywords:
+            continue
+        # The one reviewed exception: yt-dlp is started with Popen because the
+        # caller owns the deadline (wait(timeout=...) plus a process-tree
+        # kill). The exemption must be marked in the source, so a new
+        # unbounded call cannot appear silently.
+        line = path.read_text(encoding="utf-8").splitlines()[node.lineno - 1]
+        assert node.func.attr == "Popen", f"{path.name}: subprocess call without timeout"
+        assert "# timeout:" in line, (
+            f"{path.name}: Popen without a literal timeout must be marked '# timeout: <why>'"
+        )
 
 
 def test_no_subprocess_call_uses_a_shell() -> None:

@@ -46,9 +46,11 @@ function isoTime(value: number): string {
 
 async function latestProgressMessage(jobId: string, stage: string | null): Promise<string | undefined> {
   if (!stage) return undefined;
+  // rowid, not created_at: several progress updates can land in the same
+  // millisecond and the id is random, so only insertion order is reliable.
   const event = db.get<{ detail: string | null }>(
     "SELECT detail FROM job_events WHERE job_id = ? AND event_type = 'progress' " +
-      "AND stage = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+      "AND stage = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
     jobId,
     stage,
   );
@@ -105,7 +107,7 @@ export async function getJobView(jobId: string, ownerKey: string): Promise<JobVi
   const progressMessage =
     (await latestProgressMessage(job.id, stage)) ??
     (stage === "downloading"
-      ? job.progress >= 20
+      ? job.progress >= 24
         ? "MP3 downloaded; checking the audio"
         : job.progress >= 12
           ? "Downloading audio as MP3"

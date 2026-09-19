@@ -123,6 +123,17 @@ jobs that pass validation stop with `MODEL_LOAD_FAILED`.
 Warm model reuse: the worker keeps the loaded model in memory across jobs, so
 only the first job in a worker run pays model-load cost.
 
+### YouTube downloads
+
+yt-dlp runs from a fixed argument array (no shell) in its own process group
+under a hard timeout: `YT_DLP_PROBE_TIMEOUT_SECONDS` (default 60) for the title
+lookup and `YT_DLP_TIMEOUT_SECONDS` (default 300) for the download. On expiry
+the whole process tree is killed — yt-dlp spawns ffmpeg for the MP3
+post-process, and killing only the parent used to leave that child holding the
+pipes, which blocked the single-threaded worker indefinitely. Download percent
+is reported to the job page, and a failed download prints yt-dlp's stderr to
+this console (the browser only ever sees the sanitized message).
+
 ## Job pipeline (Task 11)
 
 A claimed upload job runs the full local pipeline: ffprobe validation and
