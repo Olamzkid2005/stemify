@@ -1,8 +1,9 @@
-"""Optional Spotify input (Spotify plan, milestone S1).
+"""Optional Spotify input (Spotify plan, milestones S1-S2).
 
-Metadata only: this module resolves *what* a Spotify link points at. It never
-fetches audio — that is milestone S2 (the librespot backend), and until it
-exists the worker has no Spotify download path at all.
+Two jobs, both behind the same link policy: resolve *what* a link points at
+(S1, the Web API metadata probe) and fetch its audio (S2, `download_audio`,
+which supervises the `worker.spotify_fetch` child process). The child owns the
+client library; the parent owns policy, deadlines and validation.
 
 The shape mirrors `worker/youtube.py`: an allowlisted link, worker-side
 re-validation (the worker is the final policy authority, plan Section 8), a
@@ -27,14 +28,18 @@ import base64
 import json
 import os
 import re
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
+from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlparse
 
 from worker.errors import ErrorCode
 from worker.input_audio import InputAudioError
+from worker.subprocess_group import CommandTimeout, run_grouped
 from worker.youtube import sanitize_title  # shared download-naming sanitizer (Task 14)
 
 # Same allowlist as the web app's check (apps/web/lib/jobs.ts). `spotify.link`
@@ -55,6 +60,21 @@ _TRACK_URI = re.compile(r"^spotify:track:([A-Za-z0-9]{22})$")
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 API_BASE = "https://api.spotify.com/v1"
 DEFAULT_HTTP_TIMEOUT_SECONDS = 15
+
+# S2: cached client credentials (produced by the one-time interactive login,
+# which the librespot CLI does well) live outside the web app and database.
+CREDENTIALS_FILE_ENV = "STEMIFY_SPOTIFY_CREDENTIALS_FILE"
+DEFAULT_CREDENTIALS_FILENAME = "spotify-credentials.json"
+DEFAULT_FETCH_TIMEOUT_SECONDS = 600
+# ~320 kbps Vorbis is about 40 KB/s. Only ever used to turn the child's byte
+# count into an approximate percentage, because a stream's length is unknown
+# until it ends; without a known duration we report no percentage at all rather
+# than invent one.
+ESTIMATED_BYTES_PER_SECOND = 40_000
+FETCH_PROGRESS = re.compile(r"^progress:\s*(\d+)\s*$")
+# The child writes `<id>.ogg.part` and renames on success; never treat a
+# leftover as media.
+INCOMPLETE_SUFFIXES = (".part", ".temp")
 
 
 class SpotifyError(InputAudioError):
@@ -118,6 +138,31 @@ def spotify_credentials() -> tuple[str, str] | None:
     if not client_id or not client_secret:
         return None
     return client_id, client_secret
+
+
+def credentials_file() -> Path | None:
+    """The operator's cached client credentials, or None when there are none.
+
+    Same data-directory convention as the queue (`STEMIFY_DATA_DIR`, else
+    `./data`). The file is deliberately outside the web app's reach: it holds a
+    Spotify login, and nothing about job input can influence its location.
+    """
+    raw = os.environ.get(CREDENTIALS_FILE_ENV, "").strip()
+    if raw:
+        candidate = Path(raw)
+    else:
+        data_dir = os.environ.get("STEMIFY_DATA_DIR") or Path.cwd() / "data"
+        candidate = Path(data_dir) / DEFAULT_CREDENTIALS_FILENAME
+    return candidate if candidate.is_file() else None
+
+
+def _fetch_timeout_seconds() -> int:
+    """Deadline for one audio fetch, bounded so a typo cannot disable it."""
+    raw = os.environ.get("STEMIFY_SPOTIFY_FETCH_TIMEOUT_SECONDS", str(DEFAULT_FETCH_TIMEOUT_SECONDS))
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return DEFAULT_FETCH_TIMEOUT_SECONDS
 
 
 def _http_timeout_seconds() -> int:
@@ -251,3 +296,110 @@ def unavailable_error() -> SpotifyError:
             ErrorCode.DOWNLOAD_FAILED, "Spotify input is disabled on this machine"
         )
     return SpotifyError(ErrorCode.DOWNLOAD_FAILED, "Spotify input is not configured on this machine")
+
+
+def _progress_reporter(
+    progress_callback: Callable[[float], None] | None,
+    estimated_bytes: int,
+) -> Callable[[str], None] | None:
+    """Map the child's `progress: <bytes>` lines onto a 0-100 percentage.
+
+    The stream length is unknown while it runs, so the percentage is derived
+    from the track duration and an estimated bitrate and capped below 100: the
+    completion is the child's exit, not a byte count. Progress never moves
+    backwards, and with no known duration nothing is reported at all.
+    """
+    if progress_callback is None or estimated_bytes <= 0:
+        return None
+    state = {"percent": 0.0}
+
+    def report(line: str) -> None:
+        match = FETCH_PROGRESS.match(line.strip())
+        if not match:
+            return
+        percent = min(99.0, int(match.group(1)) / estimated_bytes * 100)
+        if percent <= state["percent"]:
+            return
+        state["percent"] = percent
+        progress_callback(percent)
+
+    return report
+
+
+def download_audio(
+    url: str,
+    dest_dir: Path,
+    progress_callback: Callable[[float], None] | None = None,
+) -> Path:
+    """Fetch one track's audio into dest_dir and validate it.
+
+    The fetch runs in a supervised child process with a hard deadline, so a
+    stalled client can never block the worker. The result is the native Ogg
+    Vorbis stream — already in the upload allowlist, so nothing is re-encoded
+    before separation — and it passes the same validation ladder as uploads.
+    Raises SpotifyError with DOWNLOAD_FAILED or LIMIT_EXCEEDED.
+    """
+    if not spotify_enabled():
+        raise unavailable_error()
+    track_id = parse_track_id(url)
+    if track_id is None:
+        raise SpotifyError(ErrorCode.DOWNLOAD_FAILED, f"disallowed Spotify link: {url[:100]}")
+    credentials = credentials_file()
+    if credentials is None:
+        raise unavailable_error()
+
+    # Best-effort: the same lookup that names the job also sizes the progress
+    # estimate. Neither is required for the download itself.
+    metadata = fetch_track_metadata(track_id)
+    duration_ms = metadata.duration_ms if metadata is not None else 0
+    estimated_bytes = duration_ms * ESTIMATED_BYTES_PER_SECOND // 1000
+
+    out_path = dest_dir / f"{track_id}.ogg"
+    args = [
+        sys.executable,
+        "-m",
+        "worker.spotify_fetch",
+        "--track",
+        track_id,
+        "--out",
+        str(out_path),
+    ]
+    try:
+        result = run_grouped(
+            args,
+            timeout_seconds=_fetch_timeout_seconds(),
+            on_stdout_line=_progress_reporter(progress_callback, estimated_bytes),
+            # The credentials path goes through the environment, never argv, so
+            # it cannot show up in a process listing.
+            env={CREDENTIALS_FILE_ENV: str(credentials)},
+        )
+    except CommandTimeout as error:
+        raise SpotifyError(ErrorCode.DOWNLOAD_FAILED, str(error)) from error
+    except OSError as error:
+        raise SpotifyError(
+            ErrorCode.DOWNLOAD_FAILED, f"could not start the Spotify fetch: {error}"
+        ) from error
+    if result.returncode != 0:
+        raise SpotifyError(
+            ErrorCode.DOWNLOAD_FAILED,
+            f"Spotify fetch failed rc={result.returncode}: {result.stderr[:200]}",
+        )
+
+    candidates = sorted(
+        path
+        for path in dest_dir.iterdir()
+        if path.is_file() and path.suffix.lower() not in INCOMPLETE_SUFFIXES
+    )
+    if len(candidates) != 1:
+        raise SpotifyError(
+            ErrorCode.DOWNLOAD_FAILED,
+            f"expected exactly one media file, found {len(candidates)}",
+        )
+    media = candidates[0]
+
+    # Final authority: the same validation ladder as uploads (extension, size,
+    # ffprobe media checks, duration limit).
+    from worker.input_audio import validate_source
+
+    validate_source(media)
+    return media

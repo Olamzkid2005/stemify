@@ -1,9 +1,10 @@
 # Spotify Input Pipeline — Design Plan (planning only, not implemented)
 
-Status: **IN PROGRESS** — milestone S1 shipped in `worker/worker/spotify.py`
-(link policy, kill switch, metadata probe) with `worker/tests/test_spotify.py`;
-S2 onwards is unbuilt. Everything below describes the target design, and the
-deltas S1 made to it are listed under Section 8.
+Status: **IN PROGRESS** — S1 (link policy, kill switch, metadata probe) and S2
+(the supervised audio fetch) are shipped in `worker/worker/spotify.py` and
+`worker/worker/spotify_fetch.py`; S3 onwards is unbuilt. Everything below
+describes the target design, and the deltas S1/S2 made to it are listed under
+Section 8.
 
 ## 1. Product goal
 
@@ -162,7 +163,7 @@ Reuses `DOWNLOAD_FAILED` with Spotify-specific public messages:
 | # | Deliverable | Tests |
 |---|---|---|
 | S1 | ✅ **shipped** `spotify.py` URL allowlist + kill switch + metadata probe | `tests/test_spotify.py`, 58 pure unit tests (no network) |
-| S2 | librespot subprocess backend with stubbed subprocess | Integration tests with a fake librespot writing a fixture Ogg |
+| S2 | ✅ **shipped** supervised fetch child + `download_audio` backend | `tests/test_spotify_fetch.py`, `tests/test_spotify_download.py` (fake client library, no network) |
 | S3 | `source_type="spotify"` end-to-end through `process_job` | Extend `test_youtube_integration.py` pattern |
 | S4 | Web: third tab, contracts, job-view labels | `createJob` allowlist tests + UI |
 | S5 | Real-credential verification pass + README operator guide | Manual, reference machine |
@@ -170,6 +171,42 @@ Reuses `DOWNLOAD_FAILED` with Spotify-specific public messages:
 S1–S4 are buildable and testable with zero Spotify access (subprocess stubs
 write fixture audio, exactly like the YouTube tests). S5 is the only step that
 needs a real Premium account, and it is a verification pass, not development.
+
+### S2 deltas from this plan
+
+- **The Rust `librespot` binary cannot fetch a track**, so it is not the audio
+  backend. Its CLI is a Spotify Connect *receiver*: it authenticates, registers
+  as a device, and then plays whatever a controller sends it through an output
+  backend. There is no "download track X and exit" mode, so using it would mean
+  running a receiver plus a Connect control loop racing against playback — a lot
+  of machinery for a worse result. (Its `--passthrough` flag with the pipe
+  backend gets raw audio *out*, but only while something drives playback.)
+  What the binary **is** good at is the one-time interactive login: complete
+  OAuth once with `librespot --cache <dir> --enable-oauth`, and the cached
+  credentials are reused.
+- **The Python port (`pip install librespot`) is the backend**, because it is
+  the only one of the two that can request one specific track's stream
+  (`content_feeder().load(TrackId.from_uri(...))`). It reads both the Python and
+  the Rust credential formats, which is what lets the CLI-produced login above
+  be reused as-is.
+- **The fetch runs in a child process we own** (`python -m worker.spotify_fetch`)
+  under the same supervision as yt-dlp: own process group, hard deadline, whole
+  tree killed on expiry, stdout streamed for progress. The client library is
+  alpha and holds protocol state, so a stalled stream must never be able to
+  block the single-threaded worker.
+- **The native Ogg Vorbis stream is kept as-is.** `.ogg` is already in the
+  upload allowlist, so nothing is re-encoded before separation — the model sees
+  exactly what Spotify served.
+- **Progress is approximate, and only when it can be.** A stream's length is
+  unknown until it ends, so the child reports cumulative bytes and the parent
+  converts them with a bitrate estimate from the track duration, capped below
+  100% (the child's exit is the real completion). With no duration available,
+  no percentage is reported rather than a made-up one.
+- **Failure detail for the operator, never the browser**: the child's exit code
+  and stderr travel to `job_events` via the existing failure path.
+- New env vars: `STEMIFY_SPOTIFY_CREDENTIALS_FILE` (default
+  `data/spotify-credentials.json`), `STEMIFY_SPOTIFY_FETCH_TIMEOUT_SECONDS`
+  (default 600), `STEMIFY_SPOTIFY_HTTP_TIMEOUT_SECONDS` (metadata, default 15).
 
 ### S1 deltas from this plan
 

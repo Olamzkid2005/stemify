@@ -111,6 +111,37 @@ def test_youtube_allowlist_rejects_injection_vectors() -> None:
         assert not is_allowed_youtube_url(hostile) or " " not in hostile.split("//", 1)[1].split("?")[0]
 
 
+def test_spotify_allowlist_rejects_injection_vectors() -> None:
+    """The Spotify link is policy input: it must never carry a flag or shell text."""
+    from worker.spotify import is_allowed_spotify_url, parse_track_id
+
+    track_id = "4cOdK2wGLETKBW3PvgPWqT"
+    for hostile in [
+        f"https://open.spotify.com/track/{track_id} --out=/tmp/evil",  # argument injection
+        "https://open.spotify.com/track/$(reboot)",  # command substitution text
+        "https://open.spotify.com/track/x`id`",
+        "https://open.spotify.com/track/x;rm -rf /",
+        "https://user:pass@open.spotify.com/track/" + track_id,  # credentials in URL
+        "file:///etc/passwd",
+        "spotify:local:artist:album:title:214",
+        f"spotify:track:{track_id}&x=1",
+    ]:
+        assert not is_allowed_spotify_url(hostile), hostile
+        assert parse_track_id(hostile) is None, hostile
+
+
+def test_spotify_fetch_argv_carries_only_a_validated_id() -> None:
+    """Only the 22-character id reaches argv; the link itself never does."""
+    import inspect
+
+    from worker import spotify
+
+    src = inspect.getsource(spotify.download_audio)
+    argv_section = src.split("args = [", 1)[1].split("]", 1)[0]
+    assert "track_id" in argv_section
+    assert "url" not in argv_section, "the user-supplied link must never reach argv"
+
+
 def test_allowlist_rejects_every_non_https_scheme() -> None:
     for url in [
         "http://www.youtube.com/watch?v=1",
