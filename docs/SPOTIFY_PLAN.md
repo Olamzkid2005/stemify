@@ -1,8 +1,9 @@
 # Spotify Input Pipeline — Design Plan (planning only, not implemented)
 
-Status: **PLAN** — no code in this document is implemented yet. This mirrors the
-shape of the YouTube plan (Task 14): a new source type flows into the same
-validate → separate → encode → package pipeline unchanged.
+Status: **IN PROGRESS** — milestone S1 shipped in `worker/worker/spotify.py`
+(link policy, kill switch, metadata probe) with `worker/tests/test_spotify.py`;
+S2 onwards is unbuilt. Everything below describes the target design, and the
+deltas S1 made to it are listed under Section 8.
 
 ## 1. Product goal
 
@@ -160,7 +161,7 @@ Reuses `DOWNLOAD_FAILED` with Spotify-specific public messages:
 
 | # | Deliverable | Tests |
 |---|---|---|
-| S1 | `spotify.py` URL allowlist + kill switch + metadata probe stubs | Pure unit tests (no network), mirroring `test_youtube.py` |
+| S1 | ✅ **shipped** `spotify.py` URL allowlist + kill switch + metadata probe | `tests/test_spotify.py`, 58 pure unit tests (no network) |
 | S2 | librespot subprocess backend with stubbed subprocess | Integration tests with a fake librespot writing a fixture Ogg |
 | S3 | `source_type="spotify"` end-to-end through `process_job` | Extend `test_youtube_integration.py` pattern |
 | S4 | Web: third tab, contracts, job-view labels | `createJob` allowlist tests + UI |
@@ -169,6 +170,26 @@ Reuses `DOWNLOAD_FAILED` with Spotify-specific public messages:
 S1–S4 are buildable and testable with zero Spotify access (subprocess stubs
 write fixture audio, exactly like the YouTube tests). S5 is the only step that
 needs a real Premium account, and it is a verification pass, not development.
+
+### S1 deltas from this plan
+
+- **No `spotipy` dependency.** Metadata is one client-credentials token request
+  plus one `GET /v1/tracks/{id}`, so it uses stdlib `urllib` instead of pulling
+  in a new dependency for two fixed calls. The seam (`_request_json`) is the
+  only place that touches the network, which is what keeps the tests offline.
+- **`spotify.link` short links are rejected** for now: resolving one needs a
+  network redirect, so the worker cannot verify the target at job-creation
+  time. Revisit with the playlist/album fan-out work.
+- **v1 accepts `/track/<id>` links and `spotify:track:` URIs**, including the
+  `/intl-xx/` locale prefix Spotify itself adds. Album/playlist links are
+  rejected outright, per Section 9.
+- **Kill switch defaults off**: `STEMIFY_SPOTIFY_ENABLED=1` opts in, because an
+  unconfigured machine can serve neither metadata nor audio. Credentials are
+  `STEMIFY_SPOTIFY_CLIENT_ID` / `STEMIFY_SPOTIFY_CLIENT_SECRET`.
+- **Metadata is strictly best-effort.** Missing credentials, an unreachable
+  API, or an unusable name all return `None` and naming falls back to the
+  stored source filename — a Spotify job never fails because a *name* lookup
+  failed.
 
 ## 9. Explicit non-goals (v1)
 
