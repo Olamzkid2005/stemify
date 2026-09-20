@@ -94,6 +94,23 @@ async function readAnalysis(
   }
 }
 
+/**
+ * Fallback text for the DOWNLOADING stage, used only when no progress event has
+ * landed for it yet. Each link source describes its own transfer: a YouTube job
+ * downloads an MP3, a Spotify job streams the track's original audio. The
+ * thresholds mirror the worker's progress slices (12% start, 24% complete).
+ */
+function downloadFallbackMessage(sourceType: string, progress: number): string {
+  if (sourceType === "spotify") {
+    if (progress >= 24) return "Audio streamed; checking the audio";
+    if (progress >= 12) return "Streaming audio from Spotify";
+    return "Checking the Spotify link";
+  }
+  if (progress >= 24) return "MP3 downloaded; checking the audio";
+  if (progress >= 12) return "Downloading audio as MP3";
+  return "Checking the YouTube link";
+}
+
 export async function getJobView(jobId: string, ownerKey: string): Promise<JobView | null> {
   const job = db.get<JobRow>(
     "SELECT * FROM jobs WHERE id = ? AND owner_key = ? LIMIT 1",
@@ -107,11 +124,7 @@ export async function getJobView(jobId: string, ownerKey: string): Promise<JobVi
   const progressMessage =
     (await latestProgressMessage(job.id, stage)) ??
     (stage === "downloading"
-      ? job.progress >= 24
-        ? "MP3 downloaded; checking the audio"
-        : job.progress >= 12
-          ? "Downloading audio as MP3"
-          : "Checking the YouTube link"
+      ? downloadFallbackMessage(job.source_type, job.progress)
       : DEFAULT_PROGRESS_MESSAGES[stage] ?? "Working locally");
 
   const view: JobView = {
