@@ -8,9 +8,10 @@
  */
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useJobPolling } from "@/hooks/use-job-polling";
+import { formatElapsed, stageElapsedMs, type StageTiming } from "@/lib/stage-timings";
 
 /** Source label shown under the progress ring, per input source. */
 const SOURCE_LABELS: Record<string, string> = {
@@ -29,9 +30,25 @@ const STAGE_ORDER = [
   { key: "packaging", label: "Preparing downloads" },
 ];
 
+/**
+ * Re-render once a second while a job is active so an in-flight stage counts up
+ * between polls — the point is that a slow separation visibly keeps moving.
+ * Terminal views never start the interval.
+ */
+function useSecondTick(enabled: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [enabled]);
+  return now;
+}
+
 export default function JobPage() {
   const params = useParams<{ jobId: string }>();
   const { job, error, loading } = useJobPolling(params.jobId);
+  const now = useSecondTick(job?.status === "queued" || job?.status === "processing");
 
   if (loading) {
     return (
@@ -136,6 +153,31 @@ export default function JobPage() {
     : STAGE_ORDER.filter((stage) => stage.key !== "downloading");
   const stageIndex = stages.findIndex((stage) => stage.key === job.stage);
   const activeIndex = stageIndex >= 0 ? stageIndex : 0;
+  // Per-stage elapsed time (plan §8.4): the worker stamps every progress event
+  // with its stage, so a finished stage shows its duration and the running one
+  // ticks. A slow separation reads as "Separating stems · 45% · 4m 12s"
+  // instead of a bar that has not moved in minutes.
+  const timings = new Map<string, StageTiming>(
+    (job.stageTimings ?? []).map((timing) => [timing.stage, timing]),
+  );
+  const stageRows = stages.map((stage, index) => {
+    const current = index === activeIndex;
+    const timing = timings.get(stage.key);
+    const detail = [
+      current ? `${job.progress}%` : null,
+      timing ? formatElapsed(stageElapsedMs(timing, now)) : null,
+    ].filter((part): part is string => part !== null);
+    return {
+      key: stage.key,
+      label: stage.label,
+      number: index + 1,
+      done: index < activeIndex,
+      current,
+      detail: detail.join(" · "),
+    };
+  });
+  const createdMs = Date.parse(job.createdAt);
+  const totalElapsed = Number.isFinite(createdMs) ? formatElapsed(now - createdMs) : null;
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-grow flex-col items-center gap-8 px-4 py-10 text-center">
       <div className="space-y-3">
@@ -166,6 +208,7 @@ export default function JobPage() {
       </p>
       <p className="text-xs text-zinc-500">
         {SOURCE_LABELS[job.source.type] ?? "Local upload"} · {job.userStage} · {job.mode === "full_stems" ? "3 stems" : job.mode === "drum_breakdown" ? "4 drum parts" : "2 stems"}
+        {totalElapsed ? ` · running ${totalElapsed}` : null}
       </p>
 
       <div className="w-full space-y-2 text-left">
@@ -208,36 +251,40 @@ export default function JobPage() {
       ) : null}
 
       <ol className="w-full space-y-1.5 text-left" aria-label="Processing stages">
-        {stages.map((stage, i) => {
-          const done = i < activeIndex;
-          const active = i === activeIndex;
-          return (
-            <li
-              key={stage.key}
-              className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 text-sm transition ${
-                active
-                  ? "border-purple-500/40 bg-[#16121f] font-semibold text-white"
-                  : done
-                    ? "border-zinc-800/60 bg-[#101013] text-zinc-500"
-                    : "border-zinc-800/60 bg-[#101013] text-zinc-600"
+        {stageRows.map((stage) => (
+          <li
+            key={stage.key}
+            className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 text-sm transition ${
+              stage.current
+                ? "border-purple-500/40 bg-[#16121f] font-semibold text-white"
+                : stage.done
+                  ? "border-zinc-800/60 bg-[#101013] text-zinc-500"
+                  : "border-zinc-800/60 bg-[#101013] text-zinc-600"
+            }`}
+          >
+            <span
+              className={`inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                stage.done
+                  ? "purple-gradient-btn text-white"
+                  : stage.current
+                    ? "border border-purple-400 bg-purple-500/20 text-purple-300"
+                    : "border border-zinc-700 text-zinc-600"
               }`}
             >
+              {stage.done ? "✓" : stage.number}
+            </span>
+            <span className="flex-1">{stage.label}</span>
+            {stage.detail ? (
               <span
-                className={`inline-flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
-                  done
-                    ? "purple-gradient-btn text-white"
-                    : active
-                      ? "border border-purple-400 bg-purple-500/20 text-purple-300"
-                      : "border border-zinc-700 text-zinc-600"
+                className={`shrink-0 text-[11px] font-normal tabular-nums ${
+                  stage.current ? "text-purple-300" : "text-zinc-500"
                 }`}
               >
-                {done ? "✓" : i + 1}
+                {stage.detail}
               </span>
-              <span className="flex-1">{stage.label}</span>
-              {active ? <span className="text-[11px] font-normal text-purple-300">{job.progress}%</span> : null}
-            </li>
-          );
-        })}
+            ) : null}
+          </li>
+        ))}
       </ol>
 
       <p className="text-xs text-zinc-600">
