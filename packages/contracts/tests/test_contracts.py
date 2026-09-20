@@ -50,14 +50,32 @@ def test_job_request_accepts_youtube_source(registry) -> None:
     )
 
 
+def test_job_request_accepts_spotify_source(registry) -> None:
+    validator = validator_for("job-request.schema.json", registry)
+    validator.validate(
+        {
+            "source": {"type": "spotify", "url": "spotify:track:4cOdK2wGLETKBW3PvgPWqT"},
+            "mode": "vocals_instrumental",
+            "outputFormat": "mp3",
+            "quality": "balanced",
+            "idempotencyKey": "0123456789abcdef",
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "patch",
     [
         {"mode": "karaoke"},
         {"outputFormat": "aac"},
         {"idempotencyKey": "short"},
+        {"quality": "ultra"},
         {"source": {"type": "upload", "uploadId": UPLOAD_ID, "objectKey": "../../etc/passwd", "filename": "x.mp3"}},
         {"source": {"type": "youtube", "url": "not-a-url"}},
+        # Single tracks only: albums and playlists are the batch follow-up.
+        {"source": {"type": "spotify", "url": "https://open.spotify.com/album/4cOdK2wGLETKBW3PvgPWqT"}},
+        {"source": {"type": "spotify", "url": "spotify:track:notatrackid"}},
+        {"source": {"type": "spotify", "url": "https://evil.example.com/track/4cOdK2wGLETKBW3PvgPWqT"}},
     ],
 )
 def test_job_request_rejects_invalid_variants(registry, patch) -> None:
@@ -83,6 +101,24 @@ def test_job_status_accepts_processing(registry) -> None:
             "stage": "separating",
             "progress": 54,
             "source": {"filename": "song.mp3"},
+            "mode": "vocals_instrumental",
+            "outputFormat": "mp3",
+            "createdAt": "2026-09-06T00:00:00Z",
+            "updatedAt": "2026-09-06T00:01:12Z",
+        }
+    )
+
+
+def test_job_status_accepts_spotify_source(registry) -> None:
+    validator = validator_for("job-status.schema.json", registry)
+    validator.validate(
+        {
+            "jobId": JOB_ID,
+            "status": "processing",
+            "stage": "downloading",
+            "progress": 15,
+            "progressMessage": "Streaming audio from Spotify",
+            "source": {"type": "spotify", "filename": "Artist - Song.ogg"},
             "mode": "vocals_instrumental",
             "outputFormat": "mp3",
             "createdAt": "2026-09-06T00:00:00Z",

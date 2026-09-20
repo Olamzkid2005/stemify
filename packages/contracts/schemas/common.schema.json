@@ -4,7 +4,7 @@
   "title": "Shared enum definitions for Stemify contracts",
   "$defs": {
     "sourceType": {
-      "enum": ["upload", "youtube"]
+      "enum": ["upload", "youtube", "spotify"]
     },
     "separationMode": {
       "enum": ["vocals_instrumental", "full_stems", "drum_breakdown"]
