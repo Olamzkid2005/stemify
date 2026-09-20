@@ -7,10 +7,12 @@
  * as the worker (deflate, zeroed timestamps, entries in given order). No
  * third-party dependency.
  */
+import { once } from "node:events";
 import { createReadStream, createWriteStream } from "node:fs";
 import { open, stat, unlink } from "node:fs/promises";
 import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import type { Writable } from "node:stream";
+import { finished, pipeline } from "node:stream/promises";
 import type { FileHandle } from "node:fs/promises";
 import { createDeflateRaw, inflateRawSync } from "node:zlib";
 
@@ -152,6 +154,20 @@ function localHeaderBuffer(name: Buffer, crc: number, compressedSize: number, un
 }
 
 /**
+ * Write to a long-lived stream, waiting for drain when its buffer is full.
+ *
+ * `pipeline()` registers listeners on every stream it is given and cleans them
+ * up asynchronously, so calling it twice per entry against the same output
+ * stream accumulated error/close listeners until Node warned about a leak.
+ * Writing directly keeps the listener count flat however many entries there
+ * are, with the same backpressure.
+ */
+async function writeChunk(stream: Writable, chunk: Buffer): Promise<void> {
+  if (stream.write(chunk)) return;
+  await once(stream, "drain");
+}
+
+/**
  * Write a deterministic archive (worker layout: deflate level 6, zeroed
  * timestamps, rw-r--r--) processing one entry at a time. Each entry is
  * deflated into a reused temp file first so large stems never sit in memory
@@ -200,9 +216,11 @@ export async function writeZipArchive(destPath: string, entries: ZipEntrySource[
       // Pass 2: known-size local header, then the staged compressed bytes.
       const headerPosition = offset;
       const header = localHeaderBuffer(name, crc.digest(), compressedSize, uncompressedSize);
-      await pipeline(Readable.from(Buffer.from(header)), output, { end: false });
+      await writeChunk(output, header);
       offset += header.length;
-      await pipeline(createReadStream(tempStaging), output, { end: false });
+      for await (const chunk of createReadStream(tempStaging)) {
+        await writeChunk(output, chunk as Buffer);
+      }
       offset += compressedSize;
 
       const central = Buffer.alloc(46 + name.length);
@@ -237,7 +255,10 @@ export async function writeZipArchive(destPath: string, entries: ZipEntrySource[
     eocd.writeUInt32LE(centralDirectory.length, 12);
     eocd.writeUInt32LE(offset, 16); // start of central directory
     eocd.writeUInt16LE(0, 20);
-    await pipeline(Readable.from(Buffer.concat([centralDirectory, eocd])), output, { end: true });
+    // `finished()` (not just `end()`) so the archive is fully flushed to disk
+    // before the caller reads or serves it.
+    output.end(Buffer.concat([centralDirectory, eocd]));
+    await finished(output);
     offset += centralDirectory.length + 22;
   } catch (error) {
     output.destroy();
