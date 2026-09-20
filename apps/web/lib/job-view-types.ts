@@ -10,7 +10,7 @@ export type JobView = {
   userStage: string;
   progressMessage: string;
   progress: number;
-  source: { type: "upload" | "youtube"; filename: string | null };
+  source: { type: "upload" | "youtube" | "spotify"; filename: string | null };
   mode: string;
   outputFormat: string;
   /** Per-job quality preset; absent when the job uses the worker default. */

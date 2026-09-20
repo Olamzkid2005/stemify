@@ -13,11 +13,14 @@ import { LocalDatabase } from "./client";
  * Regression tests for the jobs-table rebuild migration (roadmap Phase B).
  *
  * History: with SQLite's default ALTER TABLE rename behavior, rebuilding the
- * legacy `jobs` table (2-value mode CHECK) rewrote job_outputs' `REFERENCES
+ * legacy `jobs` table (an older enum CHECK) rewrote job_outputs' `REFERENCES
  * jobs` clause to point at the temporary jobs_old table, and the subsequent
  * DROP left it dangling — every later insert into job_outputs failed with
  * "no such table: main.jobs_old". These tests pin the fixed behavior on the
  * web side, mirroring worker/tests/test_database_migration.py.
+ *
+ * The rebuild now keys on either stale CHECK (mode or source_type), so the same
+ * suite covers the Spotify rollout as well.
  */
 
 const LEGACY_JOB_OUTPUTS_DDL = `
@@ -86,6 +89,61 @@ function makeLegacyDb(dataDir: string): void {
   con.close();
 }
 
+/**
+ * A database from just before Spotify input: it already has the current mode
+ * CHECK and the quality column, but its source_type CHECK predates spotify.
+ * That is what an existing install looks like, and it is the case where a
+ * hand-written column list in the rebuild would silently reset every stored
+ * quality preset to NULL.
+ */
+function makePreSpotifyDb(dataDir: string): void {
+  const { DatabaseSync } = sqlite3;
+  const con = new DatabaseSync(path.join(dataDir, "stemify.sqlite3"));
+  con.exec("PRAGMA foreign_keys = ON;");
+  con.exec(`
+    CREATE TABLE jobs (
+      id TEXT PRIMARY KEY,
+      access_token_hash TEXT,
+      owner_key TEXT NOT NULL,
+      source_type TEXT NOT NULL CHECK (source_type IN ('upload', 'youtube')),
+      source_filename TEXT,
+      source_object_key TEXT,
+      source_path TEXT,
+      source_url TEXT,
+      source_duration_seconds REAL,
+      source_size_bytes INTEGER,
+      source_sha256 TEXT,
+      mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems', 'drum_breakdown')),
+      output_format TEXT NOT NULL CHECK (output_format IN ('mp3', 'wav', 'flac', 'ogg', 'm4a')),
+      quality TEXT,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'canceled', 'expired')),
+      stage TEXT,
+      progress INTEGER NOT NULL DEFAULT 0,
+      cancel_requested INTEGER NOT NULL DEFAULT 0,
+      worker_call_id TEXT,
+      idempotency_key_hash TEXT,
+      error_code TEXT,
+      error_message_public TEXT,
+      diagnostic_reference TEXT,
+      created_at INTEGER NOT NULL DEFAULT 0,
+      started_at INTEGER,
+      completed_at INTEGER,
+      expires_at INTEGER,
+      updated_at INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+  con.exec(LEGACY_JOB_OUTPUTS_DDL);
+  con.prepare(
+    `INSERT INTO jobs (id, owner_key, source_type, mode, output_format, status, quality)
+     VALUES ('job_pre_spotify', 'owner', 'upload', 'full_stems', 'mp3', 'completed', 'fast')`,
+  ).run();
+  con.prepare(
+    `INSERT INTO job_outputs (id, job_id, stem_key, label, relative_path, mime_type)
+     VALUES ('out_pre_spotify', 'job_pre_spotify', 'drums', 'Drums', 'r/d.mp3', 'audio/mpeg')`,
+  ).run();
+  con.close();
+}
+
 describe("jobs-mode migration (roadmap Phase B)", () => {
   it("rebuild preserves job_outputs' foreign key and existing rows", () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "stemify-migration-"));
@@ -150,6 +208,48 @@ describe("jobs-mode migration (roadmap Phase B)", () => {
         `INSERT INTO job_outputs (id, job_id, stem_key, label, relative_path, mime_type)
          VALUES ('out_fresh', 'job_fresh', 'vocals', 'Vocals', 'r/v.mp3', 'audio/mpeg')`,
       );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rebuilds a pre-Spotify database so spotify jobs can be created", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "stemify-migration-"));
+    makePreSpotifyDb(dataDir);
+
+    const db = new LocalDatabase(dataDir);
+    try {
+      // Every existing install carries the older source_type CHECK, which
+      // rejects this insert without the rebuild.
+      db.run(
+        `INSERT INTO jobs (id, owner_key, source_type, source_url, mode, output_format, status)
+         VALUES ('job_spotify', 'owner', 'spotify', 'spotify:track:4cOdK2wGLETKBW3PvgPWqT', 'vocals_instrumental', 'mp3', 'queued')`,
+      );
+      const job = db.get<{ source_type: string }>(
+        "SELECT source_type FROM jobs WHERE id = 'job_spotify'",
+      );
+      assert.equal(job?.source_type, "spotify");
+      assert.deepEqual(db.all("PRAGMA foreign_key_check"), []);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves quality values across the source_type rebuild", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "stemify-migration-"));
+    makePreSpotifyDb(dataDir);
+
+    const db = new LocalDatabase(dataDir);
+    try {
+      const job = db.get<{ quality: string | null; mode: string }>(
+        "SELECT quality, mode FROM jobs WHERE id = 'job_pre_spotify'",
+      );
+      assert.equal(job?.quality, "fast");
+      assert.equal(job?.mode, "full_stems");
+      const ddl = db.get<{ sql: string }>(
+        "SELECT sql FROM sqlite_master WHERE name = 'job_outputs'",
+      )?.sql;
+      assert.ok(!ddl?.includes("jobs_old"));
     } finally {
       db.close();
     }

@@ -33,7 +33,7 @@ export class LocalDatabase {
     // Migration must precede the schema script: the CREATE INDEX statements
     // would otherwise attach to the old jobs table and be dropped with it
     // during the rebuild (mirrors worker/worker/database.py).
-    this.migrateJobsModeCheck();
+    this.migrateJobsConstraints();
     this.connection.exec(SQLITE_SCHEMA);
     this.migrateAddQualityColumn();
   }
@@ -51,15 +51,24 @@ export class LocalDatabase {
   }
 
   /**
-   * Rebuild the jobs table if it still has the 2-value mode CHECK (SQLite
-   * cannot alter a CHECK, and CHECKs re-evaluate on every UPDATE). No-op when
-   * the column already accepts drum_breakdown.
+   * Rebuild the jobs table when an enum CHECK predates a current value (SQLite
+   * cannot alter a CHECK, and CHECKs re-evaluate on every UPDATE). No-op once
+   * the table accepts every current value.
    */
-  private migrateJobsModeCheck(): void {
+  private migrateJobsConstraints(): void {
     const row = this.connection
       .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'")
       .get() as { sql?: string } | undefined;
-    if (!row?.sql || row.sql.includes("drum_breakdown")) return;
+    if (!row?.sql) return;
+    // Both CHECKs live on this one table, so one rebuild covers either gap.
+    // The quoted token cannot match a comment.
+    if (row.sql.includes("drum_breakdown") && row.sql.includes("'spotify'")) return;
+    // Project exactly the columns the old table has: naming them keeps a
+    // rebuild triggered by one constraint from dropping the values of a column
+    // an earlier migration added (jobs.quality must survive this rebuild).
+    const columns = this.all<{ name: string }>("PRAGMA table_info(jobs)")
+      .map((column) => column.name)
+      .join(", ");
     // Rebuilding a table that other tables reference via foreign keys:
     // modern SQLite rewrites the REFERENCES clauses in job_outputs to point
     // at jobs_old on ANY ALTER TABLE ... RENAME (even with FK enforcement
@@ -77,21 +86,8 @@ export class LocalDatabase {
         BEGIN IMMEDIATE;
         ALTER TABLE jobs RENAME TO jobs_old;
         ${JOBS_TABLE_DDL}
-        INSERT INTO jobs (
-          id, access_token_hash, owner_key, source_type, source_filename,
-          source_object_key, source_path, source_url, source_duration_seconds,
-          source_size_bytes, source_sha256, mode, output_format, status, stage,
-          progress, cancel_requested, worker_call_id, idempotency_key_hash,
-          error_code, error_message_public, diagnostic_reference, created_at,
-          started_at, completed_at, expires_at, updated_at
-        )
-        SELECT
-          id, access_token_hash, owner_key, source_type, source_filename,
-          source_object_key, source_path, source_url, source_duration_seconds,
-          source_size_bytes, source_sha256, mode, output_format, status, stage,
-          progress, cancel_requested, worker_call_id, idempotency_key_hash,
-          error_code, error_message_public, diagnostic_reference, created_at,
-          started_at, completed_at, expires_at, updated_at
+        INSERT INTO jobs (${columns})
+        SELECT ${columns}
         FROM jobs_old;
         DROP TABLE jobs_old;
         COMMIT;

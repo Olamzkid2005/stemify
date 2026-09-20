@@ -7,7 +7,7 @@
  */
 
 export type JobStatus = "queued" | "processing" | "completed" | "failed" | "canceled" | "expired";
-export type SourceType = "upload" | "youtube";
+export type SourceType = "upload" | "youtube" | "spotify";
 export type SeparationMode = "vocals_instrumental" | "full_stems" | "drum_breakdown";
 export type OutputFormat = "mp3" | "wav" | "flac" | "ogg" | "m4a";
 
@@ -70,17 +70,18 @@ export type JobOutputRow = {
 };
 
 /**
- * jobs DDL on its own: the mode CHECK could not be altered in place when
- * drum_breakdown (roadmap Phase B) was added, so client.ts rebuilds the table
- * from this exact DDL when it finds the older 2-value constraint. Keep in
- * sync with worker/worker/database.py (JOBS_TABLE_DDL).
+ * jobs DDL on its own: a CHECK constraint cannot be altered in place, so
+ * client.ts rebuilds the table from this exact DDL when it finds an older
+ * enum — the 2-value mode CHECK (roadmap Phase B), or the source_type CHECK
+ * that predates Spotify input. Keep in sync with
+ * worker/worker/database.py (JOBS_TABLE_DDL).
  */
 export const JOBS_TABLE_DDL = `
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   access_token_hash TEXT,
   owner_key TEXT NOT NULL,
-  source_type TEXT NOT NULL CHECK (source_type IN ('upload', 'youtube')),
+  source_type TEXT NOT NULL CHECK (source_type IN ('upload', 'youtube', 'spotify')),
   source_filename TEXT,
   source_object_key TEXT,
   source_path TEXT,
