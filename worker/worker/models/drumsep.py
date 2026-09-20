@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from worker.errors import ErrorCode
 from worker.models.base import SeparationError
 from worker.models.demucs import (
+    _apply_model_with_progress,
     _configure_model_cache,
     _default_model_dir,
     _import_demucs_pretrained,
@@ -161,25 +162,27 @@ def separate(
     tensor: Any = None
     try:
         tensor = th.from_numpy(waveform.astype("float32")).to(resolved)[None]
-        if progress_callback:
-            progress_callback(0.0)
-        from demucs.apply import apply_model
+
+        def _check_canceled() -> None:
+            if cancellation_checker and cancellation_checker():
+                raise SeparationError(ErrorCode.CANCELED, "canceled during separation")
 
         with th.no_grad():
-            estimates = apply_model(
+            estimates = _apply_model_with_progress(
                 model,
+                th,
                 tensor,
                 device=resolved,
                 shifts=quality_shifts,
-                split=True,
                 overlap=quality_overlap,
                 segment=profile.chunk_length_seconds,
-                progress=False,
+                progress_callback=progress_callback,
+                on_chunk_done=_check_canceled,
             )[0]
+        # Cancellation between chunks is checked by _check_canceled; this
+        # covers the fallback path, which runs apply_model as one call.
         if cancellation_checker and cancellation_checker():
             raise SeparationError(ErrorCode.CANCELED, "canceled during separation")
-        if progress_callback:
-            progress_callback(1.0)
     except SeparationError:
         raise
     except RuntimeError as error:

@@ -48,6 +48,34 @@ class StageResult:
         self.manifest: dict[str, Any] | None = None
 
 
+# Progress landmarks for the separation stage: the model callback's 0.0-1.0
+# fraction maps onto this window, so the bar moves continuously through the
+# longest part of the job instead of parking on one value.
+SEPARATION_START_PCT = 30
+SEPARATION_END_PCT = 75
+
+# The model callback reports per-chunk completion as done/total; scale the
+# smoothed value into the separation window's interior so 30 and 75 remain the
+# stage's boundary events.
+SEPARATION_INTERIOR_START = SEPARATION_START_PCT + 1  # 31
+SEPARATION_INTERIOR_END = SEPARATION_END_PCT - 1  # 74
+
+
+def _separation_progress(fraction: float) -> int:
+    """Map a 0.0-1.0 model fraction into the separation stage's percent window."""
+    clamped = min(1.0, max(0.0, fraction))
+    return SEPARATION_INTERIOR_START + int(
+        clamped * (SEPARATION_INTERIOR_END - SEPARATION_INTERIOR_START)
+    )
+
+
+def _encode_progress(done: int, total: int) -> int:
+    """Map stem-encoding completion into the 75-90 window."""
+    safe_total = max(1, total)
+    clamped = min(1.0, max(0.0, done / safe_total))
+    return 75 + int(clamped * 15)
+
+
 def run_separation_stage(
     canonical_wav: Path,
     job_dir: Path,
@@ -64,12 +92,35 @@ def run_separation_stage(
     Drum subdivision (roadmap Phase B) dispatches to the drumsep adapter, which
     consumes the isolated drums stem as its "mixture". `full_stems` is the
     non-vocal rhythm-section split (drums, bass, instrumental).
+
+    Progress: 30 on entry, 31-74 continuously from the model's per-chunk
+    callback, 75 once separation returns. On engines that cannot report per
+    chunk (the drift fallback), the bar still parks on 30 for the inference
+    itself — audio correctness outranks bar smoothness there.
     """
     from worker.input_audio import decode_to_waveform
 
     waveform, _probe = decode_to_waveform(canonical_wav)
     if progress_callback:
-        progress_callback(Stage.SEPARATING, 30)
+        progress_callback(Stage.SEPARATING, SEPARATION_START_PCT)
+
+    # The model reports every finished chunk, and a handful can land on the same
+    # whole percent (there are only 43 percent steps across a multi-minute
+    # inference). Each update costs a DB write and a job_events row, and the job
+    # page only reads the newest one, so identical consecutive percents are
+    # dropped here.
+    last_percent = SEPARATION_START_PCT
+
+    def _on_model_progress(fraction: float) -> None:
+        nonlocal last_percent
+        if progress_callback is None:
+            return
+        percent = _separation_progress(fraction)
+        if percent == last_percent:
+            return
+        last_percent = percent
+        progress_callback(Stage.SEPARATING, percent)
+
     if mode == "drum_breakdown":
         from worker.models.drumsep import separate as separate_drums
 
@@ -77,7 +128,7 @@ def run_separation_stage(
             waveform,
             profile,
             mode=mode,
-            progress_callback=None,
+            progress_callback=_on_model_progress,
             cancellation_checker=cancellation_checker,
             quality=quality,
         )
@@ -86,13 +137,13 @@ def run_separation_stage(
             waveform,
             profile,
             mode=mode,
-            progress_callback=None,
+            progress_callback=_on_model_progress,
             cancellation_checker=cancellation_checker,
             quality=quality,
         )
     mixture = waveform
     if progress_callback:
-        progress_callback(Stage.SEPARATING, 75)
+        progress_callback(Stage.SEPARATING, SEPARATION_END_PCT)
     return stems, mixture
 
 
@@ -130,7 +181,7 @@ def encode_stems_stage(
             }
         )
         if progress_callback:
-            progress_callback(Stage.ENCODING, 75 + int((index + 1) / count * 15))
+            progress_callback(Stage.ENCODING, _encode_progress(index + 1, count))
     return encoded
 
 
@@ -245,6 +296,8 @@ def _master_duration(master: Path) -> float:
 
 __all__ = [
     "PIPELINE_STAGES",
+    "SEPARATION_END_PCT",
+    "SEPARATION_START_PCT",
     "InputAudioError",
     "OutputError",
     "SeparationError",
