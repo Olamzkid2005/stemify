@@ -1,4 +1,4 @@
-# Optional: Spotify input (Spotify plan, milestones S1-S3).
+# Optional: Spotify input (Spotify plan, milestones S1-S4).
 #
 #   pip install -r requirements-spotify.txt
 #

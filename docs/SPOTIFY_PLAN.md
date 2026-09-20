@@ -1,10 +1,11 @@
-# Spotify Input Pipeline — Design Plan (planning only, not implemented)
+# Spotify Input Pipeline — Design Plan
 
-Status: **IN PROGRESS** — S1 (link policy, kill switch, metadata probe) and S2
-(the supervised audio fetch) are shipped in `worker/worker/spotify.py` and
-`worker/worker/spotify_fetch.py`; S3 onwards is unbuilt. Everything below
-describes the target design, and the deltas S1/S2 made to it are listed under
-Section 8.
+Status: **S1–S4 SHIPPED** — link policy, kill switch and metadata probe (S1),
+the supervised audio fetch (S2), the operator login and packaging (S2.5), the
+worker's end-to-end `source_type="spotify"` path (S3), and the web UI, database
+migration and contracts (S4). Only S5 (a real-credential verification pass,
+which needs a Premium account) is left. Everything below describes the target
+design, and the deltas each milestone made to it are listed under Section 8.
 
 ## 1. Product goal
 
@@ -164,8 +165,9 @@ Reuses `DOWNLOAD_FAILED` with Spotify-specific public messages:
 |---|---|---|
 | S1 | ✅ **shipped** `spotify.py` URL allowlist + kill switch + metadata probe | `tests/test_spotify.py`, 58 pure unit tests (no network) |
 | S2 | ✅ **shipped** supervised fetch child + `download_audio` backend | `tests/test_spotify_fetch.py`, `tests/test_spotify_download.py` (fake client library, no network) |
-| S3 | `source_type="spotify"` end-to-end through `process_job` | Extend `test_youtube_integration.py` pattern |
-| S4 | Web: third tab, contracts, job-view labels | `createJob` allowlist tests + UI |
+| S2.5 | ✅ **shipped** operator login (`worker.cli spotify-login`) + packaging | `tests/test_spotify.py` (path resolution, login guard rails, `store_credentials=False`) |
+| S3 | ✅ **shipped** `source_type="spotify"` end-to-end through `process_job` | `tests/test_spotify_integration.py`: full pipeline plus every refusal path (no URL, switched off, not signed in, disallowed link) |
+| S4 | ✅ **shipped** web third tab, contracts, `source_type` rebuild migration | `jobs.test.ts` allowlist/persistence, `migration.test.ts` (spotify accepted, quality preserved), contracts request/status cases |
 | S5 | Real-credential verification pass + README operator guide | Manual, reference machine |
 
 S1–S4 are buildable and testable with zero Spotify access (subprocess stubs
@@ -181,14 +183,13 @@ needs a real Premium account, and it is a verification pass, not development.
   running a receiver plus a Connect control loop racing against playback — a lot
   of machinery for a worse result. (Its `--passthrough` flag with the pipe
   backend gets raw audio *out*, but only while something drives playback.)
-  What the binary **is** good at is the one-time interactive login: complete
-  OAuth once with `librespot --cache <dir> --enable-oauth`, and the cached
-  credentials are reused.
+  It has no login advantage either — see S2.5, where the Python port does the
+  OAuth flow itself — so the binary is not required at all.
 - **The Python port (`pip install librespot`) is the backend**, because it is
   the only one of the two that can request one specific track's stream
   (`content_feeder().load(TrackId.from_uri(...))`). It reads both the Python and
-  the Rust credential formats, which is what lets the CLI-produced login above
-  be reused as-is.
+  the Rust credential formats, so a login produced by the Rust CLI
+  (`librespot --cache <dir> --enable-oauth`) still works if someone has one.
 - **The fetch runs in a child process we own** (`python -m worker.spotify_fetch`)
   under the same supervision as yt-dlp: own process group, hard deadline, whole
   tree killed on expiry, stdout streamed for progress. The client library is
@@ -207,6 +208,80 @@ needs a real Premium account, and it is a verification pass, not development.
 - New env vars: `STEMIFY_SPOTIFY_CREDENTIALS_FILE` (default
   `data/spotify-credentials.json`), `STEMIFY_SPOTIFY_FETCH_TIMEOUT_SECONDS`
   (default 600), `STEMIFY_SPOTIFY_HTTP_TIMEOUT_SECONDS` (metadata, default 15).
+
+### S2.5 deltas: operator login and packaging
+
+- **The login is built into the worker, not delegated to the Rust binary**:
+  `python -m worker.cli spotify-login` runs the library's own OAuth flow (PKCE,
+  local callback on `http://127.0.0.1:5588/login`), prints and optionally opens
+  the approval URL, and then writes the cached credentials. Re-running is a
+  no-op that reuses the existing file. The URL is printed with `flush=True`:
+  the flow blocks on the callback, so buffered output would show the operator
+  nothing at all when stdout is not a terminal.
+- **`credentials_path()` is the single source of truth** for that file, so the
+  login can never write somewhere the fetch does not read: default
+  `STEMIFY_DATA_DIR/spotify-credentials.json`, overridable with
+  `STEMIFY_SPOTIFY_CREDENTIALS_FILE`.
+- **The fetch child never writes credentials.** The library's default is
+  `./credentials.json` under the process cwd with `store_credentials=True`, so
+  every job would have dropped a secrets file into the source tree. The child
+  now sets `store_credentials=False` explicitly and moves the session cache off
+  `<cwd>/cache` to the credentials directory as well.
+- **Packaging is a separate file** (`worker/requirements-spotify.txt`) instead
+  of `requirements.txt`, for two concrete reasons: the feature cannot be
+  exercised without a Premium account and an interactive login, and the client
+  library declares `PyOgg` — which publishes Windows wheels only. librespot
+  0.0.10 never imports PyOgg (verified: no reference anywhere in the package),
+  so a platform without that wheel installs `--no-deps` plus the modules the
+  code actually imports (`defusedxml`, `protobuf==3.20.1`, `pycryptodomex`,
+  `requests`, `websocket-client`, `zeroconf`). Keeping it out of
+  `requirements.txt` also keeps CI, which installs that file, from compiling
+  PyOgg from source on Linux.
+- **`worker.cli health` reports Spotify readiness** (`unavailable` /
+  `disabled` / `signed out` / `ready`), in the same style as the YouTube line,
+  so a misconfigured machine is diagnosable without reading logs.
+- **Honest status: the UI could not create a Spotify job yet.** The operator
+  side was ready and verified, but `source_type="spotify"` was not wired through
+  `process_job` until S3, so the web app had no third tab at that point. S3/S4
+  closed this; see the next section.
+
+### S3/S4 deltas: the end-to-end path and the UI
+
+- **`source_type` carried a CHECK constraint** (`IN ('upload', 'youtube')`), and
+  SQLite cannot alter a CHECK — so accepting a Spotify job needed a table
+  rebuild on every existing install, on both the web and worker sides. The
+  existing Phase B rebuild was generalized to key on *either* stale enum (mode
+  or source_type) rather than only the mode one.
+- **The rebuild now projects the old table's actual columns** instead of a
+  hand-written list. That list omitted `quality`, and a rebuild triggered by the
+  source_type CHECK only ever runs on a database where `quality` already exists
+  — so the hand-written version would have silently reset every stored preset to
+  NULL. Both sides are pinned by a test that seeds a pre-Spotify database with
+  `quality='fast'` and asserts it survives the rebuild.
+- **Spotify failures carry their own public message.** The job loop maps error
+  codes to user-facing text, so DOWNLOAD_FAILED would have shown "The download
+  failed, or the source is not supported." for the two cases a Spotify job hits
+  most: the kill switch is off, or there is no Premium login. `SpotifyError` now
+  carries an optional public message for exactly those two, and everything else
+  keeps the generic text — a distinction the code cannot make is not invented.
+- **The tab is always shown; the worker decides.** The kill switch is worker-side
+  state the web app cannot see, so gating the tab on a web env var would create a
+  second, divergent source of truth. The tab exists, and an unconfigured machine
+  fails the job with an explicit message.
+- **Both link tabs share one form**, driven by a per-source config block (icon,
+  labels, pattern, unsupported-link text, acknowledgement). Per-source copies of
+  the same JSX are what drift; the acknowledgement text is source-specific and
+  must not follow the user across tabs, so it resets on every tab switch — a
+  YouTube acknowledgement can no longer submit a Spotify job.
+- **The link field is `type="text"`, not `type="url"`.** The accepted policy
+  includes `spotify:track:` URIs, which native URL validation would block before
+  our own message could explain it.
+- **`job-request.schema.json` also gained the `quality` property**, which the web
+  app had been accepting since the quality picker landed. The schema is now
+  truthful about the request body rather than rejecting a field the API accepts.
+- **Naming reuses roadmap A2 unchanged**: the S1 metadata probe records
+  `Artist - Title.ogg` into `jobs.source_filename`, and a failed probe falls back
+  to the track id exactly as a failed YouTube title probe does.
 
 ### S1 deltas from this plan
 

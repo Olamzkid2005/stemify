@@ -183,9 +183,17 @@ credentials file), or `ready`.
 
 The fetch keeps Spotify's native Ogg Vorbis stream — nothing is re-encoded
 before separation — and the child process receives only the validated
-22-character track id, never the link that was pasted. The web app gets its
-Spotify tab in milestone S3 (`docs/SPOTIFY_PLAN.md`), so today this is a worker
-path only.
+22-character track id, never the link that was pasted.
+
+The web app has its **Spotify Link** tab since milestone S4
+(`docs/SPOTIFY_PLAN.md`), so a link pasted there becomes a normal job. The tab
+is always visible and the kill switch above is what decides whether a job can
+run: on a machine that is not set up, a Spotify job fails fast with its own
+message (`Spotify input is switched off on this machine.` or `Spotify input is
+not set up on this machine.`) instead of a generic download error. Only single
+tracks are accepted — album/playlist links and `spotify.link` short links are
+rejected at job creation, because a short link's target cannot be verified
+without a network redirect.
 
 ## Job pipeline (Task 11)
 
