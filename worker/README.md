@@ -98,6 +98,32 @@ or in `start.sh`; the web UI can also set it per job (the job's preset wins).
 An unknown value fails the job with `MODEL_LOAD_FAILED` rather than silently
 processing at a surprise quality.
 
+### Progress reporting
+
+Separation reports progress as it works, so the job page moves through the
+whole run instead of jumping from the start of inference to the end. Three
+things are worth knowing when you touch the model adapters:
+
+- demucs 4.0.1's `apply_model(shifts, split=True)` is one blocking call with no
+  per-chunk hook. `worker/models/demucs.py` therefore replicates its two outer
+  paths — the shift trick and the chunked split pass — so a callback can fire
+  after every finished chunk. The pipeline maps that 0-1 fraction onto the
+  separation stage's 30-75 percent window, then encoding runs 75-90 and
+  packaging 90-98.
+- The replication is guarded. `_apply_path_matches_installed()` compares the
+  installed demucs source against the code we replicate; on any mismatch it
+  falls back to plain `apply_model`, which is identical audio with coarse
+  progress (the bar parks during inference). A coarse bar is recoverable, wrong
+  audio is not — so the fallback, not a guess, is the correct default.
+- Cost is chunk count times shift passes, not track length alone: a preset with
+  `shifts=2` runs two full passes, so a 480 s track emits roughly 80 updates.
+  Only whole percents are stored and repeated percentages are dropped, so a job
+  adds at most 43 `job_events` progress rows instead of one per chunk.
+
+`tests/test_engine_progress.py` pins this against the real checkpoint (exact
+equality with `apply_model`, plus per-chunk and per-pass progress). It runs real
+inference and takes ~2 minutes, so deselect it with `-k` while iterating.
+
 ### FFmpeg
 
 The input pipeline needs `ffmpeg`/`ffprobe`. It looks for vendored static

@@ -88,7 +88,23 @@ PYTHONPATH="$PWD/.runtime" STEMIFY_MODEL_DIR="$PWD/data/models" \
 3. **CUDA remains auto-detected, never required.** `resolve_device` falls back
    to CPU cleanly, and a CPU-only build is fully functional (this entire
    benchmark ran without CUDA).
-4. **Unsupported/overcommitted hardware messaging.** A CUDA-only request
+4. **Separation progress is per finished chunk, and costs nothing measurable.**
+   demucs 4.0.1's `apply_model(shifts, split=True)` is a single blocking call
+   that reports only its start and end, which parked the job progress bar at one
+   value for the entire inference (90%+ of wall time). The worker now replicates
+   apply_model's two outer paths — the shift trick and the chunked split pass —
+   so every finished chunk fires a progress callback; a 480 s track at the 7.8 s
+   chunk length therefore emits ~40 updates per shift pass. This changes nothing
+   about the audio: the result was verified *bit-identical* to `apply_model` on
+   the real htdemucs checkpoint for both `shifts=0` and the default `shifts=2`
+   (`worker/tests/test_engine_progress.py`). The replication is guarded by a
+   source-marker check, so a demucs upgrade degrades progress to the old
+   two-step behaviour rather than risking wrong stems — an acceptable trade,
+   and the guard's test fails loudly so the drift gets noticed. Progress writes
+   are bounded: only whole percents are persisted (31-74 across the stage) and
+   repeated percentages are dropped, so a job adds at most 43 `job_events`
+   rows regardless of how many chunks it processes.
+5. **Unsupported/overcommitted hardware messaging.** A CUDA-only request
    without a GPU fails with `MODEL_LOAD_FAILED` and the message "install
    CUDA-enabled torch or set STEMIFY_DEVICE=cpu" (tested). A missing Python
    runtime fails jobs with the MODEL_LOAD_FAILED setup hint. Nothing here
