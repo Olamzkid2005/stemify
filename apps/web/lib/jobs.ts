@@ -101,6 +101,15 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
     if (typeof url !== "string" || !isAllowedYouTubeUrl(url)) {
       return { ok: false, status: 400, error: "unsupported_source" };
     }
+  } else if (source.type === "spotify") {
+    // Spotify plan S4: single tracks only. Album/playlist links and
+    // spotify.link short links are rejected because their target cannot be
+    // verified without a network redirect. The worker re-validates this same
+    // allowlist — it is the final policy authority (plan Section 8).
+    const url = source.url;
+    if (typeof url !== "string" || !isAllowedSpotifyUrl(url)) {
+      return { ok: false, status: 400, error: "unsupported_source" };
+    }
   } else if (source.type === "upload") {
     const { uploadId } = source;
     if (typeof uploadId !== "string" || !/^upl_[a-f0-9]{32}$/.test(uploadId)) {
@@ -145,10 +154,10 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
     jobId,
     input.ownerKey,
-    source.type === "youtube" ? "youtube" : "upload",
+    source.type,
     sourceFilename,
     sourceObjectKey,
-    source.type === "youtube" ? source.url : null,
+    source.type === "upload" ? null : source.url,
     mode as SeparationMode,
     outputFormat as OutputFormat,
     typeof quality === "string" ? quality : null,
@@ -167,6 +176,34 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
     status: created.id === jobId ? 201 : 200,
     job: created,
   };
+}
+
+/**
+ * Spotify track policy, mirroring the worker's (worker/worker/spotify.py).
+ * Accepts `https://open.spotify.com/track/<22-char id>` — optionally behind
+ * the /intl-xx/ locale prefix Spotify itself adds, and with a share query
+ * string — plus `spotify:track:` URIs. Album/playlist and short links are
+ * rejected: v1 is single-track.
+ */
+const SPOTIFY_TRACK_PATH = /^\/(?:intl-[a-z]{2}(?:-[A-Za-z]{2})?\/)?track\/[A-Za-z0-9]{22}$/;
+const SPOTIFY_TRACK_URI = /^spotify:track:[A-Za-z0-9]{22}$/;
+
+function isAllowedSpotifyUrl(value: string): boolean {
+  if (value.length > 2048) return false;
+  if (SPOTIFY_TRACK_URI.test(value)) return true;
+  // Never allow userinfo: URL.hostname reads the part after the last "@", so
+  // `https://open.spotify.com@evil.example/track/...` would look allowlisted.
+  if (value.includes("@")) return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.hostname === "open.spotify.com" &&
+      SPOTIFY_TRACK_PATH.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isAllowedYouTubeUrl(value: string): boolean {

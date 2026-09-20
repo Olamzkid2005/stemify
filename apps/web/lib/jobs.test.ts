@@ -111,6 +111,73 @@ describe("createJob", () => {
     if (!result.ok) assert.equal(result.status, 400);
   });
 
+  it("creates a queued job for an allowlisted Spotify track link", async () => {
+    const body = {
+      ...structuredClone(validBody),
+      source: { type: "spotify", url: "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT" },
+      idempotencyKey: "client-key-spotify-000001",
+    };
+    const result = await createJob({ ownerKey: OWNER, body });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.status, 201);
+    const row = db.get<{
+      source_type: string;
+      source_url: string | null;
+      source_object_key: string | null;
+    }>("SELECT source_type, source_url, source_object_key FROM jobs WHERE id = ?", result.job.id);
+    assert.equal(row?.source_type, "spotify");
+    assert.equal(row?.source_url, "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT");
+    assert.equal(row?.source_object_key, null);
+  });
+
+  it("accepts a spotify:track: URI and the /intl-xx/ link form", async () => {
+    for (const [index, url] of [
+      "spotify:track:4cOdK2wGLETKBW3PvgPWqT",
+      "https://open.spotify.com/intl-de/track/4cOdK2wGLETKBW3PvgPWqT?si=abc",
+    ].entries()) {
+      const body = {
+        ...structuredClone(validBody),
+        source: { type: "spotify", url },
+        idempotencyKey: `client-key-spotify-ok-00000${index}`,
+      };
+      const result = await createJob({ ownerKey: OWNER, body });
+      assert.equal(result.ok, true, `expected acceptance: ${url}`);
+    }
+  });
+
+  it("rejects Spotify links that are not a single track", async () => {
+    for (const [index, url] of [
+      "https://open.spotify.com/album/4cOdK2wGLETKBW3PvgPWqT",
+      "https://open.spotify.com/playlist/4cOdK2wGLETKBW3PvgPWqT",
+      "https://open.spotify.com/track/short",
+      "https://evil.example.com/track/4cOdK2wGLETKBW3PvgPWqT",
+      // Userinfo would make URL.hostname read "evil.example"; the policy must
+      // reject the whole link rather than let it through on the prefix.
+      "https://open.spotify.com@evil.example/track/4cOdK2wGLETKBW3PvgPWqT",
+    ].entries()) {
+      const body = {
+        ...structuredClone(validBody),
+        source: { type: "spotify", url },
+        idempotencyKey: `client-key-spotify-bad-000${index}`,
+      };
+      const result = await createJob({ ownerKey: OWNER, body });
+      assert.equal(result.ok, false, `expected rejection: ${url}`);
+      if (!result.ok) assert.equal(result.status, 400);
+    }
+  });
+
+  it("rejects an unknown source type", async () => {
+    const body = {
+      ...structuredClone(validBody),
+      source: { type: "tidal", url: "https://tidal.com/track/1" },
+      idempotencyKey: "client-key-unknown-source-01",
+    };
+    const result = await createJob({ ownerKey: OWNER, body });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.status, 400);
+  });
+
   it("persists the chosen quality preset on the created job", async () => {
     const body = {
       ...structuredClone(validBody),
