@@ -227,6 +227,25 @@ needs a real Premium account, and it is a verification pass, not development.
   every job would have dropped a secrets file into the source tree. The child
   now sets `store_credentials=False` explicitly and moves the session cache off
   `<cwd>/cache` to the credentials directory as well.
+- **One session cache is shared by every concurrent fetch, and the sharing is
+  safe by construction** (this is the follow-up to the bullet above, which
+  originally only moved the directory). The location comes from
+  `worker.spotify.cache_dir_path(credentials)`, so the login and every fetch
+  cannot disagree about it; `ensure_cache_dir()` creates it with
+  `exist_ok=True`, so two jobs starting at the same instant converge on one
+  directory instead of one of them failing (`test_spotify_fetch.py` drives that
+  race with real processes). The library's own clean-up is switched **off**
+  (`set_do_cache_clean_up(False)`): it deletes entries older than a fixed
+  threshold without knowing that a concurrent fetch is reading one, and one
+  fetch has no business deciding what another one's cache may keep. Nothing in
+  the worker ever writes to or deletes from the directory.
+- **The reliance on the library not caching is pinned by tests, not a
+  comment.** In librespot 0.0.10 `CacheManager` is an unimplemented stub and
+  `Configuration.cache_dir` is never read, so a fetch leaves the shared
+  directory exactly as it found it. The tests assert our side of that contract
+  (the configuration handed over, a pre-existing entry surviving both a fetch
+  and a re-login, and nothing extra appearing). If a future version starts
+  writing, that is where a lock or a per-fetch subdirectory goes.
 - **Packaging is a separate file** (`worker/requirements-spotify.txt`) instead
   of `requirements.txt`, for two concrete reasons: the feature cannot be
   exercised without a Premium account and an interactive login, and the client
