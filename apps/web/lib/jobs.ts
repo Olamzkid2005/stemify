@@ -6,6 +6,7 @@
  */
 import { createHmac, randomUUID } from "node:crypto";
 
+import { spotifyEnabled } from "@/lib/capabilities";
 import { db } from "@/lib/db/client";
 import { type JobRow, type JobStatus, type SeparationMode, type OutputFormat, type UploadRow } from "@/lib/db/schema";
 import { getStorage } from "@/lib/storage";
@@ -109,6 +110,13 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
     const url = source.url;
     if (typeof url !== "string" || !isAllowedSpotifyUrl(url)) {
       return { ok: false, status: 400, error: "unsupported_source" };
+    }
+    // Capability, not policy: a machine with Spotify switched off (or without
+    // the Premium setup) makes the worker refuse every Spotify job, so refuse
+    // it here, where the UI can say what to do about it, instead of accepting a
+    // job that dies on claim.
+    if (!spotifyEnabled()) {
+      return { ok: false, status: 400, error: "spotify_unavailable" };
     }
   } else if (source.type === "upload") {
     const { uploadId } = source;

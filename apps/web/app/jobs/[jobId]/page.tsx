@@ -136,6 +136,8 @@ export default function JobPage() {
         jobId={job.jobId}
         analysis={job.analysis}
         filename={job.source.filename}
+        album={job.source.album}
+        artworkUrl={job.source.artworkUrl}
         mode={job.mode}
         stems={job.stems ?? []}
         workerRunning={job.workerRunning}
@@ -180,14 +182,33 @@ export default function JobPage() {
   const totalElapsed = Number.isFinite(createdMs) ? formatElapsed(now - createdMs) : null;
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-grow flex-col items-center gap-8 px-4 py-10 text-center">
-      <div className="space-y-3">
+      <div className="flex flex-col items-center space-y-3">
+        {/* Album cover, served from this machine (lib/artwork.ts) — the browser
+            never contacts Spotify for it. */}
+        {job.source.artworkUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- local route, fixed size, no optimizer needed
+          <img
+            src={job.source.artworkUrl}
+            alt=""
+            width={72}
+            height={72}
+            className="h-[72px] w-[72px] rounded-xl border border-zinc-800 object-cover shadow-lg shadow-black/40"
+          />
+        ) : null}
         <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-purple-400">
           {job.status === "queued" ? "Queued" : "In progress"}
         </p>
         <h1 className="text-3xl font-extrabold text-white">Separating your track</h1>
-        <span className="inline-block max-w-full truncate rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-300">
-          {job.source.filename ?? "Audio file"}
-        </span>
+        <div className="flex max-w-full flex-wrap items-center justify-center gap-2">
+          <span className="inline-block max-w-full truncate rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-300">
+            {job.source.filename ?? "Audio file"}
+          </span>
+          {job.source.album ? (
+            <span className="inline-block max-w-full truncate rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-400">
+              {job.source.album}
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <div
@@ -297,6 +318,8 @@ export default function JobPage() {
 function CompletedView({
   jobId,
   filename,
+  album,
+  artworkUrl,
   mode,
   stems,
   workerRunning,
@@ -306,6 +329,8 @@ function CompletedView({
 }: {
   jobId: string;
   filename: string | null;
+  album?: string;
+  artworkUrl?: string;
   mode: string;
   stems: { id: string; label: string; durationSeconds: number | null }[];
   workerRunning?: boolean;
@@ -353,9 +378,24 @@ function CompletedView({
       </div>
 
       <div className="flex flex-wrap items-center justify-center gap-2">
+        {artworkUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- local route, fixed size, no optimizer needed
+          <img
+            src={artworkUrl}
+            alt=""
+            width={56}
+            height={56}
+            className="h-14 w-14 rounded-xl border border-zinc-800 object-cover"
+          />
+        ) : null}
         <span className="max-w-full truncate rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-300">
           {filename}
         </span>
+        {album ? (
+          <span className="max-w-full truncate rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-400">
+            {album}
+          </span>
+        ) : null}
         <span className="rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-400">
           {mode === "full_stems"
             ? "Drums, bass & instrumental"

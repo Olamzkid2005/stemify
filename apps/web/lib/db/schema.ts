@@ -19,6 +19,8 @@ export type JobRow = {
   owner_key: string;
   source_type: SourceType;
   source_filename: string | null;
+  /** Album of the resolved link source; null for uploads and failed lookups. */
+  source_album: string | null;
   source_object_key: string | null;
   source_path: string | null;
   source_url: string | null;
@@ -83,6 +85,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   owner_key TEXT NOT NULL,
   source_type TEXT NOT NULL CHECK (source_type IN ('upload', 'youtube', 'spotify')),
   source_filename TEXT,
+  source_album TEXT,
   source_object_key TEXT,
   source_path TEXT,
   source_url TEXT,

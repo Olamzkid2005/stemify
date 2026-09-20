@@ -11,7 +11,17 @@ export type JobView = {
   userStage: string;
   progressMessage: string;
   progress: number;
-  source: { type: "upload" | "youtube" | "spotify"; filename: string | null };
+  source: {
+    type: "upload" | "youtube" | "spotify";
+    filename: string | null;
+    /** Album of the resolved link source; absent when it is unknown. */
+    album?: string;
+    /**
+     * Cover art for this job, served from the local data directory (never
+     * proxied from Spotify). Absent when no cover was saved.
+     */
+    artworkUrl?: string;
+  };
   mode: string;
   outputFormat: string;
   /** Per-job quality preset; absent when the job uses the worker default. */

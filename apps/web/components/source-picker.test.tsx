@@ -62,7 +62,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function render(): HTMLElement {
+function render({ spotifyAvailable = true }: { spotifyAvailable?: boolean } = {}): HTMLElement {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -71,7 +71,12 @@ function render(): HTMLElement {
   act(() => {
     // The real navigate pushes to the Next router; recording the href is what
     // the assertions need, and it keeps the router out of the test entirely.
-    root.render(<SourcePickerForm navigate={(href) => navigated.push(href)} />);
+    root.render(
+      <SourcePickerForm
+        navigate={(href) => navigated.push(href)}
+        spotifyAvailable={spotifyAvailable}
+      />,
+    );
   });
   return container;
 }
@@ -197,6 +202,63 @@ describe("SourcePickerForm", () => {
     assert.equal(submitButton(container).disabled, true);
   });
 
+  it("explains why the submit button will not respond", () => {
+    const container = render();
+    click(tab(container, "Spotify Link"));
+
+    // Regression: the button used to be silently disabled, so clicking it after
+    // pasting a link did nothing at all — no message, no request, no hint.
+    assert.equal(submitButton(container).disabled, true);
+    assert.ok(container.textContent?.includes("Paste a link above to continue."));
+
+    type(linkInput(container), TRACK_URL);
+    assert.equal(submitButton(container).disabled, true);
+    assert.ok(container.textContent?.includes("Tick the box above to confirm"));
+
+    click(acknowledgement(container));
+    assert.equal(submitButton(container).disabled, false);
+    assert.equal(container.textContent?.includes("Tick the box above to confirm"), false);
+  });
+
+  it("names the missing acknowledgement when submit is reached anyway", async () => {
+    const container = render();
+    click(tab(container, "Spotify Link"));
+    type(linkInput(container), TRACK_URL);
+    await act(async () => {
+      fireSubmit(container);
+    });
+    await flushPromises();
+
+    assert.ok(container.textContent?.includes("Tick the box above to confirm"));
+    assert.equal(fetchCalls.length, 0, "nothing is requested without consent");
+    assert.deepEqual(navigated, []);
+  });
+
+  it("reports a stale server as unreachable instead of a rejected job", async () => {
+    // What a rebuilt route answers: 404 with an HTML body, not JSON.
+    globalThis.fetch = (() =>
+      Promise.resolve({
+        ok: false,
+        status: 404,
+        json: async () => {
+          throw new Error("not json");
+        },
+      } as unknown as Response)) as typeof fetch;
+
+    const container = render();
+    click(tab(container, "Spotify Link"));
+    type(linkInput(container), TRACK_URL);
+    click(acknowledgement(container));
+    await act(async () => {
+      fireSubmit(container);
+    });
+    await flushPromises();
+
+    assert.deepEqual(navigated, []);
+    assert.ok(container.textContent?.includes("Could not reach the local service"));
+    assert.ok(container.textContent?.includes("refresh this page"));
+  });
+
   it("refuses a Spotify album link with the Spotify-specific message", () => {
     const container = render();
     click(tab(container, "Spotify Link"));
@@ -238,6 +300,43 @@ describe("SourcePickerForm", () => {
     assert.match(body.idempotencyKey, /^[0-9a-f-]{36}$/);
     assert.deepEqual(navigated, ["/jobs/job_abc123"]);
     assert.equal(container.textContent?.includes("could not be started"), false);
+  });
+
+  it("accepts the spotify:track: URI the desktop app copies", async () => {
+    const container = render();
+    click(tab(container, "Spotify Link"));
+    // Regression: the server and the worker both accept this form while the
+    // client pattern did not, so a pasted URI was rejected before it could be
+    // submitted.
+    type(linkInput(container), "spotify:track:4cOdK2wGLETKBW3PvgPWqT");
+    click(acknowledgement(container));
+    await act(async () => {
+      fireSubmit(container);
+    });
+    await flushPromises();
+
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(fetchCalls[0].url, "/api/jobs");
+    const body = JSON.parse(String(fetchCalls[0].init.body)) as { source: unknown };
+    assert.deepEqual(body.source, { type: "spotify", url: "spotify:track:4cOdK2wGLETKBW3PvgPWqT" });
+    assert.deepEqual(navigated, ["/jobs/job_abc123"]);
+  });
+
+  it("says why Spotify is unavailable instead of offering a form that can only fail", () => {
+    const container = render({ spotifyAvailable: false });
+    click(tab(container, "Spotify Link"));
+
+    // No field and no form: a job created here would be refused on claim.
+    assert.equal(container.querySelector("form"), null);
+    assert.equal(container.querySelector("#link-url"), null);
+    assert.ok(container.textContent?.includes("Spotify input is switched off on this machine"));
+    assert.ok(container.textContent?.includes("STEMIFY_SPOTIFY_ENABLED=1"));
+
+    // Other sources are unaffected by one source's capability.
+    click(tab(container, "YouTube Link"));
+    assert.ok(container.querySelector("#link-url"), "YouTube still takes a link");
+    click(tab(container, "Upload File"));
+    assert.ok(container.textContent?.includes("Drop an audio file here"));
   });
 
   it("surfaces a rejected job instead of navigating", async () => {

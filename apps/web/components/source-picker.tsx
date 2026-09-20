@@ -36,6 +36,11 @@ const LINK_TABS: Record<
     pattern: RegExp;
     unsupported: string;
     acknowledgement: string;
+    /**
+     * Shown instead of the form when this machine cannot serve the source at
+     * all (see lib/capabilities.ts). Absent = always available.
+     */
+    unavailable?: string;
   }
 > = {
   youtube: {
@@ -53,14 +58,39 @@ const LINK_TABS: Record<
     tabLabel: "Spotify Link",
     fieldLabel: "Spotify track link",
     placeholder: "https://open.spotify.com/track/…",
+    // The same two shapes the server accepts (lib/jobs.ts, and the worker's
+    // own allowlist): the https track link — optionally behind the /intl-xx/
+    // locale prefix Spotify itself adds, with a share query string — and the
+    // `spotify:track:` URI the desktop app copies. The server accepted the URI
+    // while this pattern did not, so a pasted URI was rejected here first.
     pattern:
-      /^https:\/\/open\.spotify\.com\/(intl-[a-z]{2}(-[A-Za-z]{2})?\/)?track\/[A-Za-z0-9]{22}(\?[^\s]*)?$/,
+      /^https:\/\/open\.spotify\.com\/(intl-[a-z]{2}(-[A-Za-z]{2})?\/)?track\/[A-Za-z0-9]{22}(\?[^\s]*)?$|^spotify:track:[A-Za-z0-9]{22}$/,
     unsupported:
       "That link is not supported. Use a single track link — open.spotify.com/track/… (albums and playlists are not supported yet).",
     acknowledgement:
       "I confirm I have the right to use this audio and that my use complies with Spotify's Terms of Service. It is fetched with my own Premium account and processed locally for personal use only.",
+    unavailable:
+      "Spotify input is switched off on this machine, so a link cannot be fetched. Add STEMIFY_SPOTIFY_ENABLED=1 to .env and restart Stemify, then complete the one-time Premium login — see the Spotify section of worker/README.md.",
   },
 };
+
+/**
+ * Shown whenever the submit button is disabled for a reason the user can fix.
+ * A disabled control with only `opacity-40` behind it is indistinguishable from
+ * a broken one — "I pasted the link and nothing happened" — so the reason is
+ * always on screen next to the button that will not respond.
+ */
+const MISSING_LINK_HINT = "Paste a link above to continue.";
+const MISSING_ACKNOWLEDGEMENT_HINT =
+  "Tick the box above to confirm you have the right to use this audio.";
+
+/**
+ * A response the client could not read at all is not a rejected job: the local
+ * server is stale (a rebuilt route answers 404) or was stopped mid-request.
+ * Saying "try again" there hides the one action that actually helps.
+ */
+const SERVICE_UNREACHABLE_MESSAGE =
+  "Could not reach the local service. Check that Stemify is still running, then refresh this page and try again.";
 
 function sourceErrorMessage(code: string, tab: SourceTab): string {
   if (code === "unsupported_source") {
@@ -70,6 +100,9 @@ function sourceErrorMessage(code: string, tab: SourceTab): string {
   }
   if (code === "too_many_active_jobs") {
     return "You already have a job running. Wait for it to finish first.";
+  }
+  if (code === "spotify_unavailable") {
+    return LINK_TABS.spotify.unavailable ?? "Spotify input is not available on this machine.";
   }
   if (code === "upload_expired" || code === "object_missing") {
     return "That upload is no longer available. Upload the file again.";
@@ -83,13 +116,20 @@ function sourceErrorMessage(code: string, tab: SourceTab): string {
  * this wrapper means `SourcePickerForm` can be rendered directly in a test
  * with a stub `navigate` and no router at all.
  */
-export function SourcePicker() {
+export function SourcePicker({ spotifyAvailable }: { spotifyAvailable: boolean }) {
   const router = useRouter();
   const navigate = useCallback((href: string) => router.push(href), [router]);
-  return <SourcePickerForm navigate={navigate} />;
+  return <SourcePickerForm navigate={navigate} spotifyAvailable={spotifyAvailable} />;
 }
 
-export function SourcePickerForm({ navigate }: { navigate: (href: string) => void }) {
+export function SourcePickerForm({
+  navigate,
+  spotifyAvailable,
+}: {
+  navigate: (href: string) => void;
+  /** Server-provided capability; false hides the form for a source this machine cannot fetch. */
+  spotifyAvailable: boolean;
+}) {
   const [tab, setTab] = useState<SourceTab>("upload");
   const [separationMode, setSeparationMode] = useState<SeparationMode>("vocals_instrumental");
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("mp3");
@@ -117,14 +157,22 @@ export function SourcePickerForm({ navigate }: { navigate: (href: string) => voi
             idempotencyKey: crypto.randomUUID(),
           }),
         });
-        const body = (await response.json()) as { jobId?: string; error?: string };
+        // A JSON parse failure is its own case, not a generic rejection: an HTML
+        // 404 body from a stale dev server must not read as "try again".
+        const body = (await response.json().catch(() => null)) as
+          | { jobId?: string; error?: string }
+          | null;
+        if (!body) {
+          setError(SERVICE_UNREACHABLE_MESSAGE);
+          return;
+        }
         if (!response.ok || !body.jobId) {
           setError(sourceErrorMessage(body.error ?? "job_creation_failed", tab));
           return;
         }
         navigate(`/jobs/${body.jobId}`);
       } catch {
-        setError("The separation job could not be started. Try again.");
+        setError(SERVICE_UNREACHABLE_MESSAGE);
       } finally {
         setSubmitting(false);
       }
@@ -148,17 +196,50 @@ export function SourcePickerForm({ navigate }: { navigate: (href: string) => voi
     [startJob],
   );
 
+  const unavailable = useCallback(
+    (source: SourceTab): string | null =>
+      source === "spotify" && !spotifyAvailable
+        ? (LINK_TABS.spotify.unavailable ?? null)
+        : null,
+    [spotifyAvailable],
+  );
+
   const handleLinkSubmit = useCallback(() => {
     if (tab === "upload") return;
     const config = LINK_TABS[tab];
+    const blocked = unavailable(tab);
+    if (blocked) {
+      // The form is not rendered for an unavailable source, so this only guards
+      // against a future path that submits without one.
+      setError(blocked);
+      return;
+    }
     const trimmed = url.trim();
+    if (!trimmed) {
+      setError(MISSING_LINK_HINT);
+      return;
+    }
     if (!config.pattern.test(trimmed)) {
       setError(config.unsupported);
       return;
     }
-    if (!acknowledged) return;
+    if (!acknowledged) {
+      setError(MISSING_ACKNOWLEDGEMENT_HINT);
+      return;
+    }
     void startJob({ type: tab, url: trimmed });
-  }, [acknowledged, startJob, tab, url]);
+  }, [acknowledged, startJob, tab, unavailable, url]);
+
+  // Why the submit button will not respond, stated before it is clicked: the
+  // disabled attribute alone is invisible reasoning.
+  const linkHint =
+    tab === "upload" || unavailable(tab)
+      ? null
+      : url.trim().length === 0
+        ? MISSING_LINK_HINT
+        : acknowledged
+          ? null
+          : MISSING_ACKNOWLEDGEMENT_HINT;
 
   return (
     <div className="flex w-full flex-col items-center">
@@ -187,6 +268,21 @@ export function SourcePickerForm({ navigate }: { navigate: (href: string) => voi
 
       {tab === "upload" ? (
         <UploadDropzone onUploaded={handleUploaded} />
+      ) : unavailable(tab) ? (
+        /*
+         * A form here could only produce a job the worker refuses, which is
+         * how "paste a link" turned into "nothing happens" (a job that failed
+         * milliseconds after being claimed). Say why instead.
+         */
+        <div
+          role="status"
+          className="w-full max-w-xl rounded-xl border border-amber-900/50 bg-amber-950/20 px-5 py-4 text-left"
+        >
+          <p className="text-xs font-semibold uppercase tracking-widest text-amber-400">
+            {LINK_TABS[tab].tabLabel} unavailable
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-amber-200/80">{unavailable(tab)}</p>
+        </div>
       ) : (
         <form
           className="flex w-full max-w-xl flex-col items-stretch"
@@ -235,6 +331,19 @@ export function SourcePickerForm({ navigate }: { navigate: (href: string) => voi
         </form>
       )}
 
+      {error ? (
+        <p
+          role="alert"
+          className="mt-4 w-full max-w-xl rounded-xl border border-red-900/60 bg-red-950/30 px-4 py-3 text-left text-xs leading-relaxed text-red-200"
+        >
+          {error}
+        </p>
+      ) : linkHint ? (
+        <p className="mt-4 w-full max-w-xl text-left text-xs leading-relaxed text-amber-300/80">
+          {linkHint}
+        </p>
+      ) : null}
+
       <div className="mt-8 flex flex-col items-center">
         <span className="mb-3 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Separation Mode</span>
         <div className="flex items-center gap-1 rounded-xl border border-zinc-800/90 bg-[#121215] p-1">
@@ -275,7 +384,6 @@ export function SourcePickerForm({ navigate }: { navigate: (href: string) => voi
         </div>
       </div>
 
-      <p aria-live="polite" className="mt-3 min-h-5 text-xs text-red-400">{error}</p>
     </div>
   );
 }

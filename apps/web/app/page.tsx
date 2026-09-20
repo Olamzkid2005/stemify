@@ -1,4 +1,13 @@
 import { SourcePicker } from "@/components/source-picker";
+import { spotifyEnabled } from "@/lib/capabilities";
+
+/**
+ * Rendered per request: the picker reports a machine capability read from the
+ * environment (lib/capabilities.ts), and a statically built page would bake in
+ * whatever value the build happened to run with. Nothing else here needs a
+ * dynamic render.
+ */
+export const dynamic = "force-dynamic";
 
 export default function Home() {
   return (
@@ -51,8 +60,8 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Input Mode Switcher + Upload/YouTube flows */}
-        <SourcePicker />
+        {/* Input Mode Switcher + Upload/YouTube/Spotify flows */}
+        <SourcePicker spotifyAvailable={spotifyEnabled()} />
 
         {/* Feature Badges */}
         <div className="mt-10 flex flex-wrap items-center justify-center gap-6 md:gap-8 text-zinc-500 text-[11px] font-semibold tracking-wider">

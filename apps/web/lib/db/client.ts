@@ -35,18 +35,22 @@ export class LocalDatabase {
     // during the rebuild (mirrors worker/worker/database.py).
     this.migrateJobsConstraints();
     this.connection.exec(SQLITE_SCHEMA);
-    this.migrateAddQualityColumn();
+    this.migrateAdditiveColumns();
   }
 
   /**
-   * Add jobs.quality to databases created before per-job quality existed
-   * (mirrors worker/worker/database.py). Additive ALTER: nullable column,
-   * no rebuild, old rows read NULL = worker default.
+   * Add jobs columns that postdate the table's first release (mirrors
+   * worker/worker/database.py). Additive ALTERs only: every one is nullable, so
+   * no rebuild and old rows read NULL — no per-job quality (worker default), no
+   * source album to display.
    */
-  private migrateAddQualityColumn(): void {
-    const columns = this.all<{ name: string }>("PRAGMA table_info(jobs)");
-    if (!columns.some((column) => column.name === "quality")) {
+  private migrateAdditiveColumns(): void {
+    const names = new Set(this.all<{ name: string }>("PRAGMA table_info(jobs)").map((c) => c.name));
+    if (!names.has("quality")) {
       this.run("ALTER TABLE jobs ADD COLUMN quality TEXT");
+    }
+    if (!names.has("source_album")) {
+      this.run("ALTER TABLE jobs ADD COLUMN source_album TEXT");
     }
   }
 

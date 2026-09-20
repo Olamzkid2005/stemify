@@ -12,11 +12,15 @@ import "./test-env";
 import { db, closeDatabase } from "@/lib/db/client";
 import { FakeStorage } from "@/lib/storage/fake";
 import { __setStorageForTests } from "@/lib/storage";
-import { createJob } from "@/lib/jobs";
+import { createJob, idempotencyHash } from "@/lib/jobs";
 
 // These tests exercise idempotency/ownership, not the Task 13 active-job limit;
 // lift the limit so multiple jobs for one owner don't trip 429s here.
 process.env.MAX_ACTIVE_JOBS = "100";
+// Spotify is opt-in per machine (lib/capabilities.ts); the link tests below are
+// about the allowlist, so treat this machine as Spotify-capable. The capability
+// gate has its own test, which flips this off for the duration.
+process.env.STEMIFY_SPOTIFY_ENABLED = "1";
 
 const OWNER = "gid_testowner0000000001";
 const UPLOAD_ID = `upl_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -48,6 +52,7 @@ describe("createJob", () => {
 
   after(() => {
     delete process.env.MAX_ACTIVE_JOBS;
+    delete process.env.STEMIFY_SPOTIFY_ENABLED;
     db.run("DELETE FROM jobs WHERE owner_key = ?", OWNER);
     db.run("DELETE FROM uploads WHERE owner_key = ?", OWNER);
     closeDatabase();
@@ -164,6 +169,40 @@ describe("createJob", () => {
       const result = await createJob({ ownerKey: OWNER, body });
       assert.equal(result.ok, false, `expected rejection: ${url}`);
       if (!result.ok) assert.equal(result.status, 400);
+    }
+  });
+
+  it("refuses a Spotify job when this machine has the source switched off", async () => {
+    // The worker's kill switch defaults off (Spotify needs a Premium login), and
+    // it refuses every Spotify job while it is off. Accepting the job here would
+    // queue work that dies on claim with nothing for the user to act on.
+    delete process.env.STEMIFY_SPOTIFY_ENABLED;
+    const key = "client-key-spotify-off-0001";
+    try {
+      const result = await createJob({
+        ownerKey: OWNER,
+        body: {
+          ...structuredClone(validBody),
+          source: { type: "spotify", url: "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT" },
+          idempotencyKey: key,
+        },
+      });
+      assert.equal(result.ok, false);
+      if (!result.ok) {
+        // Distinct from unsupported_source: the link is valid, the machine is
+        // not set up, and the two need different instructions.
+        assert.equal(result.error, "spotify_unavailable");
+        assert.equal(result.status, 400);
+      }
+      // Nothing was queued for the worker to pick up and refuse.
+      const row = db.get<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM jobs WHERE owner_key = ? AND idempotency_key_hash = ?",
+        OWNER,
+        idempotencyHash(OWNER, key),
+      );
+      assert.equal(row?.n, 0);
+    } finally {
+      process.env.STEMIFY_SPOTIFY_ENABLED = "1";
     }
   });
 

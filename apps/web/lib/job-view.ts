@@ -4,6 +4,7 @@
  * Filesystem paths, owner identifiers, and worker internals never leave the
  * server. SQLite is the source of truth for the browser polling response.
  */
+import { findJobArtwork, jobArtworkUrl } from "@/lib/artwork";
 import { db } from "@/lib/db/client";
 import { type JobOutputRow, type JobRow } from "@/lib/db/schema";
 import { getLocalStorage } from "@/lib/storage";
@@ -145,6 +146,16 @@ export async function getJobView(jobId: string, ownerKey: string): Promise<JobVi
       ? downloadFallbackMessage(job.source_type, job.progress)
       : DEFAULT_PROGRESS_MESSAGES[stage] ?? "Working locally");
 
+  // Richer source metadata (album + cover). Both are optional by nature: the
+  // album comes from the worker's best-effort lookup and the cover only exists
+  // when the fetch actually saved one.
+  const source: JobView["source"] = {
+    type: job.source_type,
+    filename: job.source_filename,
+  };
+  if (job.source_album) source.album = job.source_album;
+  if (await findJobArtwork(job.id)) source.artworkUrl = jobArtworkUrl(job.id);
+
   const view: JobView = {
     jobId: job.id,
     status: job.status,
@@ -152,7 +163,7 @@ export async function getJobView(jobId: string, ownerKey: string): Promise<JobVi
     userStage,
     progressMessage,
     progress: job.progress,
-    source: { type: job.source_type, filename: job.source_filename },
+    source,
     mode: job.mode,
     outputFormat: job.output_format,
     ...(job.quality ? { quality: job.quality as "fast" | "balanced" } : {}),
