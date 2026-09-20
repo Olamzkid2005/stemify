@@ -26,7 +26,11 @@
       "required": ["filename"],
       "properties": {
         "type": { "$ref": "common.schema.json#/$defs/sourceType" },
-        "filename": { "type": "string", "minLength": 1, "maxLength": 255 }
+        "filename": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 255
+        }
       }
     },
     "mode": { "$ref": "common.schema.json#/$defs/separationMode" },

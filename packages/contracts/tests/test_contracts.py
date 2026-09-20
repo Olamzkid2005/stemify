@@ -109,6 +109,24 @@ def test_job_status_accepts_processing(registry) -> None:
     )
 
 
+def test_job_status_accepts_unresolved_link_filename(registry) -> None:
+    """A link job can be visible before its optional title probe resolves."""
+    validator = validator_for("job-status.schema.json", registry)
+    validator.validate(
+        {
+            "jobId": JOB_ID,
+            "status": "queued",
+            "stage": "starting",
+            "progress": 0,
+            "source": {"type": "youtube", "filename": None},
+            "mode": "vocals_instrumental",
+            "outputFormat": "mp3",
+            "createdAt": "2026-09-06T00:00:00Z",
+            "updatedAt": "2026-09-06T00:00:00Z",
+        }
+    )
+
+
 def test_job_status_accepts_stage_timings(registry) -> None:
     """Per-stage elapsed timing: closed spans plus the running one, which has no
     endedAt because the worker is still inside that stage."""
