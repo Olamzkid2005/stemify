@@ -115,6 +115,11 @@ describe("full local flow (Task 15)", () => {
       jobId = result.job.id;
       const view = await getJobView(jobId, OWNER);
       assert.equal(view?.status, "queued");
+      // No worker step yet: the only span is the queue wait, anchored on
+      // submission (plan §8.4) and still open so the page keeps counting.
+      assert.equal(view?.stageTimings?.length, 1);
+      assert.equal(view?.stageTimings?.[0].stage, "starting");
+      assert.equal(view?.stageTimings?.[0].endedAt, undefined);
     }
   });
 
@@ -162,5 +167,55 @@ describe("full local flow (Task 15)", () => {
       jobId,
     );
     assert.equal(rows[0]?.n, 0);
+  });
+
+  it("derives per-stage timings from the worker's progress events", async () => {
+    // A worker partway through separating, on a coherent past timeline:
+    // submitted, then claimed a minute later. One timestamp per stage it has
+    // been through, and several events (therefore rows) for the long stage.
+    // Runs last: it hands the job back to a running state.
+    const now = Date.now();
+    const submittedAt = now - 300_000;
+    const claimedAt = now - 240_000;
+    db.run(
+      `UPDATE jobs SET status = 'processing', stage = 'separating', progress = 61,
+       created_at = ?, started_at = ?, completed_at = NULL, updated_at = ? WHERE id = ?`,
+      submittedAt,
+      claimedAt,
+      now,
+      jobId,
+    );
+    db.run("DELETE FROM job_events WHERE job_id = ?", jobId);
+    const events = [
+      { offsetMs: 0, stage: "validating", progress: 15 },
+      { offsetMs: 30_000, stage: "preparing_audio", progress: 25 },
+      { offsetMs: 45_000, stage: "separating", progress: 30 },
+      { offsetMs: 180_000, stage: "separating", progress: 61 },
+    ];
+    for (const event of events) {
+      db.run(
+        `INSERT INTO job_events (id, job_id, event_type, stage, progress, detail, created_at)
+         VALUES (?, ?, 'progress', ?, ?, 'detail', ?)`,
+        `evt_${event.stage}_${event.offsetMs}`,
+        jobId,
+        event.stage,
+        event.progress,
+        claimedAt + event.offsetMs,
+      );
+    }
+
+    const timings = (await getJobView(jobId, OWNER))?.stageTimings ?? [];
+    assert.deepEqual(
+      timings.map((timing) => timing.stage),
+      ["starting", "validating", "preparing_audio", "separating"],
+    );
+    // The queue wait runs from submission to the first worker step.
+    assert.equal(timings[0].startedAt, new Date(submittedAt).toISOString());
+    assert.equal(timings[0].endedAt, new Date(claimedAt).toISOString());
+    // Finished stages are closed; the running one is left open to be ticked,
+    // and its start is the first event for that stage, not the latest one.
+    assert.equal(timings[1].endedAt, new Date(claimedAt + 30_000).toISOString());
+    assert.equal(timings[3].startedAt, new Date(claimedAt + 45_000).toISOString());
+    assert.equal(timings[3].endedAt, undefined);
   });
 });

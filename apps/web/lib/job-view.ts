@@ -9,6 +9,7 @@ import { type JobOutputRow, type JobRow } from "@/lib/db/schema";
 import { getLocalStorage } from "@/lib/storage";
 import { readZipEntryFromFile } from "@/lib/zip";
 import { workerStatus } from "@/lib/worker-status";
+import { deriveStageTimings, type StageStart } from "./stage-timings";
 import { isTerminalStatus, type JobView } from "./job-view-types";
 
 const USER_STAGES: Record<string, string> = {
@@ -95,6 +96,23 @@ async function readAnalysis(
 }
 
 /**
+ * When each stage began: the worker's first progress event for it. Progress
+ * events are the only stage-stamped rows the worker writes, so this is the
+ * earliest per-stage timestamp that exists. Ordered by start, with the stage
+ * name as a deterministic tiebreak for events in the same millisecond.
+ */
+function stageStarts(jobId: string): StageStart[] {
+  return db
+    .all<{ stage: string; started_at: number }>(
+      "SELECT stage, MIN(created_at) AS started_at FROM job_events " +
+        "WHERE job_id = ? AND event_type = 'progress' AND stage IS NOT NULL " +
+        "GROUP BY stage ORDER BY started_at, stage",
+      jobId,
+    )
+    .map((row) => ({ stage: row.stage, startedAt: row.started_at }));
+}
+
+/**
  * Fallback text for the DOWNLOADING stage, used only when no progress event has
  * landed for it yet. Each link source describes its own transfer: a YouTube job
  * downloads an MP3, a Spotify job streams the track's original audio. The
@@ -168,6 +186,19 @@ export async function getJobView(jobId: string, ownerKey: string): Promise<JobVi
   // Task 13: non-sensitive worker-unavailable signal for active jobs only.
   if (job.status === "queued" || job.status === "processing") {
     view.workerRunning = workerStatus().running;
+  }
+
+  // Per-stage timing (plan §8.4). Only for jobs still showing the stage list:
+  // a completed job's page shows stems, and polling has already stopped there.
+  if (job.status !== "completed") {
+    view.stageTimings = deriveStageTimings(
+      job.created_at,
+      stageStarts(job.id),
+      // A terminal job closes its last stage; an active one stays open so the
+      // page can keep counting. `updated_at` covers terminal states that do not
+      // set completed_at (expiry by the cleanup pass).
+      isTerminalStatus(job.status) ? (job.completed_at ?? job.updated_at) : null,
+    );
   }
 
   return view;

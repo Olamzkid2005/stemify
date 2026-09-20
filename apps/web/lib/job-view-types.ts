@@ -2,6 +2,7 @@
  * Client-safe job view types and stage mapping (plan §8.3/§11.3).
  * Split from job-view.ts so client components never import the DB.
  */
+import type { StageTiming } from "./stage-timings";
 
 export type JobView = {
   jobId: string;
@@ -29,6 +30,10 @@ export type JobView = {
   errorMessage?: string | null;
   // Task 13: false only while a queued/processing job sees a stale worker heartbeat.
   workerRunning?: boolean;
+  // Per-stage timing, chronological. Only for jobs that are not completed: the
+  // completed view shows a stem list rather than the stage list. The running
+  // stage has no `endedAt`, so the page ticks it live.
+  stageTimings?: StageTiming[];
 };
 
 const TERMINAL = new Set(["completed", "failed", "canceled", "expired"]);
