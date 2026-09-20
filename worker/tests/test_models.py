@@ -481,6 +481,20 @@ def test_weights_only_compat_restores_torch_load(
     assert "weights_only" not in fake.load_calls[1]
 
 
+def test_weights_only_compat_skips_torch_without_a_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A torch-compatible minimal runtime without metadata must remain usable."""
+    import types
+
+    module = types.ModuleType("torch")
+    module.load = lambda *args, **kwargs: None  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", module)
+
+    with demucs_module._weights_only_compat():
+        pass
+
+
 def test_weights_only_compat_skips_torch_below_2_6(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

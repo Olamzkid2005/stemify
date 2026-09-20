@@ -346,11 +346,26 @@ def _weights_only_compat() -> Iterator[None]:
         # _import_torch path; nothing to patch here.
         yield
         return
-    if tuple(int(p) for p in torch.__version__.split("+", 1)[0].split(".")[:2]) < (2, 6):
+    # Some torch-compatible test/minimal runtimes do not publish a version.
+    # They cannot be known to have the 2.6 default, so leave them untouched;
+    # the real PyTorch distributions always expose __version__.
+    version = getattr(torch, "__version__", None)
+    if not isinstance(version, str):
+        yield
+        return
+    try:
+        major, minor = (int(part) for part in version.split("+", 1)[0].split(".")[:2])
+    except (TypeError, ValueError):
+        yield
+        return
+    if (major, minor) < (2, 6):
         yield
         return
 
-    original_load = torch.load
+    original_load = getattr(torch, "load", None)
+    if not callable(original_load):
+        yield
+        return
 
     def _load_without_weights_only(*args: Any, **kwargs: Any) -> Any:
         kwargs["weights_only"] = False

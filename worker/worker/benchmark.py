@@ -63,16 +63,23 @@ def _environment() -> dict:
         ram_gb = round(psutil.virtual_memory().total / 1024**3, 1)
     except ImportError:
         pass
+    cuda = getattr(torch, "cuda", None)
+    is_available = getattr(cuda, "is_available", None)
+    cuda_available = bool(is_available()) if callable(is_available) else False
+    get_num_threads = getattr(torch, "get_num_threads", None)
+    torch_threads = get_num_threads() if callable(get_num_threads) else None
+    torch_version = getattr(torch, "__version__", None)
+    get_device_name = getattr(cuda, "get_device_name", None)
     return {
         "python": platform.python_version(),
         "platform": f"{platform.system()} {platform.release()} {machine}",
         "processor": platform.processor(),
         "cpu_count": multiprocessing.cpu_count(),
-        "torch_threads": torch.get_num_threads(),
+        "torch_threads": torch_threads,
         "ram_gb": ram_gb,
-        "cuda_available": torch.cuda.is_available(),
-        "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-        "torch_version": torch.__version__,
+        "cuda_available": cuda_available,
+        "cuda_device": get_device_name(0) if cuda_available and callable(get_device_name) else None,
+        "torch_version": torch_version,
         "profile": DEFAULT_PROFILE.profile_id,
         "model_id": DEFAULT_PROFILE.model_id,
         "device_policy": DEFAULT_PROFILE.device_policy,

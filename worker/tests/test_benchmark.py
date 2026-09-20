@@ -48,6 +48,22 @@ def test_environment_reports_without_cuda() -> None:
         assert key in env
 
 
+def test_environment_tolerates_minimal_torch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Environment reporting is diagnostic and must not require optional torch APIs."""
+    import sys
+    import types
+
+    minimal_torch = types.ModuleType("torch")
+    minimal_torch.cuda = types.SimpleNamespace(is_available=lambda: False)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", minimal_torch)
+
+    env = _environment()
+    assert env["cuda_available"] is False
+    assert env["cuda_device"] is None
+    assert env["torch_threads"] is None
+    assert env["torch_version"] is None
+
+
 def test_run_benchmark_with_stubbed_stages(monkeypatch: pytest.MonkeyPatch) -> None:
     """Report assembly works end-to-end without loading the real model."""
 
