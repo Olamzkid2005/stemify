@@ -21,14 +21,15 @@ from worker.stages import Stage
 # Same DDL as apps/web/lib/db/schema.ts (SQLITE_SCHEMA). Kept in sync by
 # review — update both sides in the same change. Note: SQLite cannot alter a
 # CHECK constraint and constraints re-evaluate on every UPDATE, so both
-# clients rebuild the jobs table when it still carries the older 2-value mode
-# constraint (_migrate_jobs_mode_check below / apps/web/lib/db/client.ts).
+# clients rebuild the jobs table when it still carries an older enum
+# constraint — the 2-value mode CHECK, or the source_type CHECK that predates
+# Spotify input (_migrate_jobs_constraints below / apps/web/lib/db/client.ts).
 JOBS_TABLE_DDL = """\
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   access_token_hash TEXT,
   owner_key TEXT NOT NULL,
-  source_type TEXT NOT NULL CHECK (source_type IN ('upload', 'youtube')),
+  source_type TEXT NOT NULL CHECK (source_type IN ('upload', 'youtube', 'spotify')),
   source_filename TEXT,
   source_object_key TEXT,
   source_path TEXT,
@@ -166,26 +167,39 @@ class JobQueue:
         # Migration must precede the schema script: the CREATE INDEX statements
         # would otherwise attach to the old jobs table and be dropped with it
         # during the rebuild.
-        self._migrate_jobs_mode_check()
+        self._migrate_jobs_constraints()
         self._connection.executescript(SQLITE_SCHEMA)
         self._migrate_add_quality_column()
 
     def close(self) -> None:
         self._connection.close()
 
-    def _migrate_jobs_mode_check(self) -> None:
-        """Rebuild the jobs table if it still has the 2-value mode CHECK.
+    def _migrate_jobs_constraints(self) -> None:
+        """Rebuild the jobs table when an enum CHECK predates a current value.
 
         SQLite cannot alter a CHECK constraint, and CHECKs re-evaluate on every
         UPDATE — so a database created before drum_breakdown (roadmap Phase B)
-        would reject even unrelated updates to any jobs row. The rebuild is a
-        no-op when the column already accepts the new value.
+        or before Spotify input would reject even unrelated updates to any jobs
+        row. The rebuild is a no-op once the table accepts every current value.
         """
         row = self._connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
         ).fetchone()
-        if row is None or "drum_breakdown" in (row[0] or ""):
+        if row is None:
             return
+        table_sql = row[0] or ""
+        # Both CHECKs live on this one table, so one rebuild covers either gap.
+        # The quoted token cannot match a comment.
+        if "drum_breakdown" in table_sql and "'spotify'" in table_sql:
+            return
+        # Project exactly the columns the old table has. Naming them
+        # explicitly is what stops a rebuild triggered by one constraint from
+        # dropping the values of a column an earlier migration added —
+        # jobs.quality is the live example, and it must survive this rebuild.
+        columns = ", ".join(
+            column[1]
+            for column in self._connection.execute("PRAGMA table_info(jobs)").fetchall()
+        )
         # Rebuilding a table that other tables reference via foreign keys:
         # modern SQLite rewrites the REFERENCES clauses in job_outputs to
         # point at jobs_old on ANY ALTER TABLE ... RENAME (even with FK
@@ -205,22 +219,9 @@ class JobQueue:
                 ALTER TABLE jobs RENAME TO jobs_old;
                 """
                 + JOBS_TABLE_DDL
-                + """
-                INSERT INTO jobs (
-                  id, access_token_hash, owner_key, source_type, source_filename,
-                  source_object_key, source_path, source_url, source_duration_seconds,
-                  source_size_bytes, source_sha256, mode, output_format, status, stage,
-                  progress, cancel_requested, worker_call_id, idempotency_key_hash,
-                  error_code, error_message_public, diagnostic_reference, created_at,
-                  started_at, completed_at, expires_at, updated_at
-                )
-                SELECT
-                  id, access_token_hash, owner_key, source_type, source_filename,
-                  source_object_key, source_path, source_url, source_duration_seconds,
-                  source_size_bytes, source_sha256, mode, output_format, status, stage,
-                  progress, cancel_requested, worker_call_id, idempotency_key_hash,
-                  error_code, error_message_public, diagnostic_reference, created_at,
-                  started_at, completed_at, expires_at, updated_at
+                + f"""
+                INSERT INTO jobs ({columns})
+                SELECT {columns}
                 FROM jobs_old;
                 DROP TABLE jobs_old;
                 COMMIT;

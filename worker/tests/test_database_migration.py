@@ -1,7 +1,9 @@
 """Regression tests for the jobs-table rebuild migration (roadmap Phase B).
 
-The migration rewrites a legacy ``jobs`` table (2-value mode CHECK) into the
-current one. History: with ``PRAGMA foreign_keys = ON`` during the rebuild,
+The migration rewrites a legacy ``jobs`` table (an older enum CHECK) into the
+current one — the 2-value mode CHECK (roadmap Phase B), and the source_type
+CHECK that predates Spotify input. History: with ``PRAGMA foreign_keys = ON``
+during the rebuild,
 ``ALTER TABLE jobs RENAME TO jobs_old`` silently rewrote job_outputs'
 ``REFERENCES jobs`` clause to point at jobs_old, and the subsequent DROP left
 it dangling — every later insert into job_outputs then failed with
@@ -26,6 +28,19 @@ from worker.database import JOBS_TABLE_DDL, JobQueue
 LEGACY_JOBS_DDL = JOBS_TABLE_DDL.replace(
     "mode IN ('vocals_instrumental', 'full_stems', 'drum_breakdown')",
     "mode IN ('vocals_instrumental', 'full_stems')",
+).replace(
+    "CREATE TABLE IF NOT EXISTS jobs",
+    "CREATE TABLE jobs",
+)
+
+# The pre-Spotify jobs DDL: identical to the current DDL except the source_type
+# CHECK. Derived from the live constant for the same no-drift reason, and it
+# still carries `quality` — which is exactly the value the rebuild must not
+# drop, because quality arrived in a *later* migration than the one the
+# source_type rebuild replaces.
+PRE_SPOTIFY_JOBS_DDL = JOBS_TABLE_DDL.replace(
+    "source_type IN ('upload', 'youtube', 'spotify')",
+    "source_type IN ('upload', 'youtube')",
 ).replace(
     "CREATE TABLE IF NOT EXISTS jobs",
     "CREATE TABLE jobs",
@@ -131,6 +146,77 @@ def test_foreign_keys_are_enforced_after_rebuild(tmp_path: Path) -> None:
                 "INSERT INTO job_outputs (id, job_id, stem_key, label, relative_path, mime_type)"
                 " VALUES ('out_orphan', 'job_missing', 'x', 'X', 'r/x.mp3', 'audio/mpeg')"
             )
+    finally:
+        queue.close()
+
+
+def _make_pre_spotify_db(data_dir: Path) -> Path:
+    """A database from just before Spotify input: it has quality, not spotify."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    db_path = data_dir / "stemify.sqlite3"
+    con = sqlite3.connect(db_path)
+    con.executescript("PRAGMA foreign_keys = ON;")
+    con.executescript(PRE_SPOTIFY_JOBS_DDL + LEGACY_JOB_OUTPUTS_DDL)
+    con.execute(
+        "INSERT INTO jobs (id, owner_key, source_type, mode, output_format, status, quality)"
+        " VALUES ('job_sp', 'owner', 'upload', 'full_stems', 'mp3', 'completed', 'fast')"
+    )
+    con.execute(
+        "INSERT INTO job_outputs (id, job_id, stem_key, label, relative_path, mime_type)"
+        " VALUES ('out_sp', 'job_sp', 'drums', 'Drums', 'r/d.mp3', 'audio/mpeg')"
+    )
+    con.commit()
+    con.close()
+    return db_path
+
+
+def test_rebuilt_table_accepts_spotify_source(tmp_path: Path) -> None:
+    """A database that predates Spotify input must accept source_type='spotify'.
+
+    Without this rebuild the CHECK rejects the insert on a machine upgrading
+    from any earlier release, which is every existing install.
+    """
+    _make_pre_spotify_db(tmp_path)
+    queue = JobQueue(data_dir=str(tmp_path))
+    try:
+        queue._connection.execute(
+            "INSERT INTO jobs (id, owner_key, source_type, source_url, mode, output_format, status)"
+            " VALUES ('job_spotify', 'owner', 'spotify', 'spotify:track:4cOdK2wGLETKBW3PvgPWqT',"
+            " 'vocals_instrumental', 'mp3', 'queued')"
+        )
+        claimed = queue.claim_next_queued_job()
+        assert claimed is not None
+        assert claimed.source_type == "spotify"
+        assert claimed.source_url == "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
+    finally:
+        queue.close()
+
+
+def test_source_type_rebuild_preserves_quality_and_foreign_keys(tmp_path: Path) -> None:
+    """The rebuild projects existing columns, so jobs.quality survives it.
+
+    Regression guard: the previous rebuild listed its columns by hand and
+    omitted quality. Any rebuild triggered by the source_type CHECK runs on a
+    database where quality already exists, so a hand-written list would have
+    silently reset every stored preset to NULL.
+    """
+    _make_pre_spotify_db(tmp_path)
+    queue = JobQueue(data_dir=str(tmp_path))
+    try:
+        row = queue._connection.execute(
+            "SELECT quality, source_type, mode FROM jobs WHERE id = 'job_sp'"
+        ).fetchone()
+        assert row == ("fast", "upload", "full_stems")
+        # The FK rewrite guard still holds on this rebuild path.
+        outputs_ddl = queue._connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'job_outputs'"
+        ).fetchone()
+        assert "jobs_old" not in (outputs_ddl[0] or "")
+        assert queue._connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        queue._connection.execute(
+            "INSERT INTO job_outputs (id, job_id, stem_key, label, relative_path, mime_type)"
+            " VALUES ('out_sp2', 'job_sp', 'bass', 'Bass', 'r/b.mp3', 'audio/mpeg')"
+        )
     finally:
         queue.close()
 
