@@ -14,11 +14,16 @@ repeatedly: every step tolerates already-deleted state and reports counts.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from worker.database import JobQueue, _now_ms
+
+# Upload directories are named from the upload id, so anything else in the
+# source root (a half-written directory, an operator's file) is left alone.
+re_full_upload_dir = re.compile(r"^upl_[a-f0-9]{32}$")
 
 
 @dataclass
@@ -144,11 +149,6 @@ def delete_stale_temp_dirs(queue: JobQueue, max_age_ms: int = 6 * 3_600_000) -> 
             shutil.rmtree(entry, ignore_errors=True)
             deleted += 1
     return deleted
-
-
-import re
-
-re_full_upload_dir = re.compile(r"^upl_[a-f0-9]{32}$")
 
 
 def run_cleanup(queue: JobQueue, now: int | None = None) -> CleanupReport:

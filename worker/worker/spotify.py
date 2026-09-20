@@ -29,6 +29,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import sys
 import urllib.error
 import urllib.parse
@@ -67,10 +68,18 @@ DEFAULT_HTTP_TIMEOUT_SECONDS = 15
 # which the librespot CLI does well) live outside the web app and database.
 CREDENTIALS_FILE_ENV = "STEMIFY_SPOTIFY_CREDENTIALS_FILE"
 DEFAULT_CREDENTIALS_FILENAME = "spotify-credentials.json"
-# Session cache (audio keys/chunks). The client library defaults to
-# `<cwd>/cache`, which would dump stream data next to the source; the login and
-# the fetch child both keep it beside the credentials instead.
+# Session cache location, shared by design. The client library defaults to
+# `<cwd>/cache`, so this keeps anything it writes beside the credentials
+# instead of next to the source tree. Exactly one directory per credentials
+# file, reached only through `cache_dir_path()`/`ensure_cache_dir()` below, so
+# the login and every concurrent fetch agree on where it is. See
+# `create_session` (worker/spotify_fetch.py) for the sharing contract.
 CACHE_DIR_NAME = "spotify-cache"
+# Suffix for the file the client library writes before it is swapped in. The
+# library truncates and dumps in place, so writing straight to the real path
+# means a fetch running during a re-login (or a login that dies mid-write) can
+# read a half-written file and report "signed out" forever after.
+STAGING_SUFFIX = ".partial"
 DEFAULT_FETCH_TIMEOUT_SECONDS = 600
 # ~320 kbps Vorbis is about 40 KB/s. Only ever used to turn the child's byte
 # count into an approximate percentage, because a stream's length is unknown
@@ -78,6 +87,11 @@ DEFAULT_FETCH_TIMEOUT_SECONDS = 600
 # than invent one.
 ESTIMATED_BYTES_PER_SECOND = 40_000
 FETCH_PROGRESS = re.compile(r"^progress:\s*(\d+)\s*$")
+# The fetch child reports the track's own catalogue metadata on one line before
+# it streams. That is the only source of a title and a duration that needs no
+# extra operator setup (the Web API probe needs an app id/secret), so a machine
+# with just the Premium login still names and times its jobs.
+METADATA_PREFIX = "metadata: "
 # The child writes `<id>.ogg.part` and renames on success; never treat a
 # leftover as media.
 INCOMPLETE_SUFFIXES = (".part", ".temp")
@@ -179,6 +193,39 @@ def credentials_file() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def staging_credentials_path(target: Path) -> Path:
+    """Sibling the client library writes to before `login` swaps it in."""
+    return target.with_name(f"{target.name}{STAGING_SUFFIX}")
+
+
+def cache_dir_path(credentials: Path) -> Path:
+    """The one session cache directory the login and every fetch share.
+
+    Derived from the credentials path rather than configured separately, so
+    pointing `STEMIFY_SPOTIFY_CREDENTIALS_FILE` somewhere else can never leave
+    a fetch reading a cache that belongs to a different login. Single source of
+    truth for the location, mirroring `credentials_path()`: two copies of this
+    rule would eventually disagree and quietly split the cache in two.
+    """
+    return credentials.parent / CACHE_DIR_NAME
+
+
+def ensure_cache_dir(credentials: Path) -> Path:
+    """Create the shared session cache directory and return it.
+
+    Safe to call from several fetches at once: `exist_ok=True` makes the loser
+    of a create race a no-op rather than an error, so two jobs starting on the
+    same credentials converge on one directory instead of one of them failing.
+    Best-effort: the cache is an optimisation, so a directory the worker cannot
+    create must not fail a fetch or a login that would otherwise have worked.
+    Nothing here ever removes anything from the directory.
+    """
+    path = cache_dir_path(credentials)
+    with contextlib.suppress(OSError):
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def login(*, open_browser: bool = True) -> Path:
     """One-time interactive login; caches reusable credentials for later jobs.
 
@@ -190,6 +237,14 @@ def login(*, open_browser: bool = True) -> Path:
 
     Safe to re-run: when credentials already exist the library reuses them
     instead of asking again. Never prints the credential contents.
+
+    Safe to re-run *while jobs are fetching*, too, which is the reason this
+    writes through a staging file: every fetch reads this one file, and the
+    library writes it by truncating in place, so publishing it directly would
+    let a concurrent read (or an interrupted login) observe a half-written file
+    — and every later job would then report the machine as signed out. The
+    swap is a single `os.replace`, so a reader sees either the old credentials
+    or the new ones, never a mixture.
     """
     try:
         from librespot.core import Session
@@ -202,6 +257,19 @@ def login(*, open_browser: bool = True) -> Path:
 
     target = credentials_path()
     target.parent.mkdir(parents=True, exist_ok=True)
+    # The same shared directory the fetches are pointed at, so the login never
+    # leaves a second cache beside the one in use.
+    ensure_cache_dir(target)
+    staging = staging_credentials_path(target)
+    staging.unlink(missing_ok=True)
+    # Carry the previous login across so a re-run still reuses it (the library
+    # reads the stored file it is pointed at) rather than prompting again. A
+    # copy rather than a move: the real file must stay valid until the swap.
+    if target.is_file():
+        try:
+            shutil.copyfile(target, staging)
+        except OSError:  # unreadable existing login is not fatal; just re-auth
+            staging.unlink(missing_ok=True)
 
     def show_url(url: str) -> None:
         # Flushed: this must be on screen before the flow blocks on the callback,
@@ -213,31 +281,40 @@ def login(*, open_browser: bool = True) -> Path:
 
     configuration = (
         Session.Configuration.Builder()
-        # The one place credentials may be written, and only to the path the
-        # fetch path reads back.
+        # The library's only write target, and deliberately not the path the
+        # fetch reads back: see the docstring.
         .set_store_credentials(True)
-        .set_stored_credential_file(str(target))
-        .set_cache_dir(str(target.parent / CACHE_DIR_NAME))
+        .set_stored_credential_file(str(staging))
+        .set_cache_dir(str(cache_dir_path(target)))
         .build()
     )
     try:
-        session = Session.Builder(configuration).oauth(show_url).create()
-    except Exception as error:  # any sign-in failure becomes one operator-facing message
-        raise SpotifyError(
-            ErrorCode.DOWNLOAD_FAILED,
-            f"Spotify sign-in failed: {type(error).__name__}: {error}",
-        ) from error
-    # Releasing the connection is best-effort: the credentials are already on
-    # disk, so a close failure must not turn a successful login into an error.
-    with contextlib.suppress(Exception):
-        session.close()
+        try:
+            session = Session.Builder(configuration).oauth(show_url).create()
+        except Exception as error:  # any sign-in failure becomes one operator-facing message
+            raise SpotifyError(
+                ErrorCode.DOWNLOAD_FAILED,
+                f"Spotify sign-in failed: {type(error).__name__}: {error}",
+            ) from error
+        # Releasing the connection is best-effort: the credentials are already on
+        # disk, so a close failure must not turn a successful login into an error.
+        with contextlib.suppress(Exception):
+            session.close()
 
-    if not target.is_file():
-        raise SpotifyError(
-            ErrorCode.DOWNLOAD_FAILED,
-            "the client library stored no credentials; nothing was configured",
-        )
-    return target
+        if not staging.is_file():
+            raise SpotifyError(
+                ErrorCode.DOWNLOAD_FAILED,
+                "the client library stored no credentials; nothing was configured",
+            )
+        # Published as one atomic step: readers see old credentials or new ones.
+        os.replace(staging, target)
+        return target
+    finally:
+        # Runs on the way out of every path, including a Ctrl+C: a staging file
+        # holds real credentials and the operator may have abandoned the flow,
+        # so nothing may be left behind for a later run to pick up. A no-op once
+        # the swap above has already moved it.
+        staging.unlink(missing_ok=True)
 
 
 def _fetch_timeout_seconds() -> int:
@@ -353,6 +430,18 @@ def fetch_track_metadata(track_id: str) -> TrackMetadata | None:
     )
 
 
+def display_name(metadata: TrackMetadata) -> str | None:
+    """`Artist - Title` for naming a job or a download (roadmap A2).
+
+    One implementation for both sources of metadata (the Web API probe and the
+    fetch child), because two copies of this formatting would eventually
+    disagree about the separator or the sanitizer. None when the sanitized name
+    is empty, which leaves the caller's fallback in place.
+    """
+    name = f"{metadata.artist} - {metadata.title}" if metadata.artist else metadata.title
+    return sanitize_title(name) or None
+
+
 def resolve_title(url: str) -> str | None:
     """Best-effort `Artist - Title` for job/download naming (roadmap A2).
 
@@ -369,8 +458,7 @@ def resolve_title(url: str) -> str | None:
     metadata = fetch_track_metadata(track_id)
     if metadata is None:
         return None
-    name = f"{metadata.artist} - {metadata.title}" if metadata.artist else metadata.title
-    return sanitize_title(name) or None
+    return display_name(metadata)
 
 
 def unavailable_error() -> SpotifyError:
@@ -395,38 +483,90 @@ def unavailable_error() -> SpotifyError:
     )
 
 
-def _progress_reporter(
-    progress_callback: Callable[[float], None] | None,
-    estimated_bytes: int,
-) -> Callable[[str], None] | None:
-    """Map the child's `progress: <bytes>` lines onto a 0-100 percentage.
+def _parse_track_metadata_line(line: str) -> TrackMetadata | None:
+    """Parse the child's one `metadata: <json>` line; None for anything else.
 
-    The stream length is unknown while it runs, so the percentage is derived
-    from the track duration and an estimated bitrate and capped below 100: the
-    completion is the child's exit, not a byte count. Progress never moves
-    backwards, and with no known duration nothing is reported at all.
+    Strict about the fields it returns and permissive about everything else: a
+    child that prints nothing, or prints rubbish, must leave the download
+    exactly as it was.
     """
-    if progress_callback is None or estimated_bytes <= 0:
+    if not line.startswith(METADATA_PREFIX):
         return None
-    state = {"percent": 0.0}
+    try:
+        payload = json.loads(line[len(METADATA_PREFIX) :])
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    track_id = payload.get("track_id")
+    title = payload.get("title")
+    if not isinstance(track_id, str) or not isinstance(title, str) or not title.strip():
+        return None
+    artist = payload.get("artist")
+    album = payload.get("album")
+    duration = payload.get("duration_ms")
+    return TrackMetadata(
+        track_id=track_id,
+        title=title.strip(),
+        artist=artist.strip() if isinstance(artist, str) else "",
+        album=album.strip() if isinstance(album, str) else "",
+        duration_ms=duration if isinstance(duration, int) and duration > 0 else 0,
+    )
 
-    def report(line: str) -> None:
-        match = FETCH_PROGRESS.match(line.strip())
-        if not match:
-            return
-        percent = min(99.0, int(match.group(1)) / estimated_bytes * 100)
-        if percent <= state["percent"]:
-            return
-        state["percent"] = percent
-        progress_callback(percent)
 
-    return report
+class _FetchReporter:
+    """The child's stdout: the track's metadata, then `progress: <bytes>` lines.
+
+    The duration can come from two places and either may be missing — the Web
+    API probe (needs operator credentials) or the child itself (needs nothing)
+    — so the byte estimate is learned rather than assumed. A percentage is only
+    ever computed from a duration that was actually seen, and the top one stays
+    below 100 because the child's exit is the completion signal, not a byte
+    count. Progress never moves backwards.
+    """
+
+    def __init__(
+        self,
+        progress_callback: Callable[[float], None] | None,
+        estimated_bytes: int,
+        on_track_metadata: Callable[[TrackMetadata], None] | None,
+    ) -> None:
+        self._progress_callback = progress_callback
+        self._estimated_bytes = max(0, estimated_bytes)
+        self._on_track_metadata = on_track_metadata
+        self._percent = 0.0
+
+    def __call__(self, line: str) -> None:
+        stripped = line.strip()
+        metadata = _parse_track_metadata_line(stripped)
+        if metadata is not None:
+            self._learn(metadata)
+            return
+        match = FETCH_PROGRESS.match(stripped)
+        if match is None or self._progress_callback is None or self._estimated_bytes <= 0:
+            return
+        percent = min(99.0, int(match.group(1)) / self._estimated_bytes * 100)
+        if percent <= self._percent:
+            return
+        self._percent = percent
+        self._progress_callback(percent)
+
+    def _learn(self, metadata: TrackMetadata) -> None:
+        """Take the duration (for progress) and hand the metadata to the caller."""
+        if metadata.duration_ms > 0:
+            self._estimated_bytes = (
+                metadata.duration_ms * ESTIMATED_BYTES_PER_SECOND // 1000
+            )
+        if self._on_track_metadata is not None:
+            self._on_track_metadata(metadata)
 
 
 def download_audio(
     url: str,
     dest_dir: Path,
     progress_callback: Callable[[float], None] | None = None,
+    on_track_metadata: Callable[[TrackMetadata], None] | None = None,
+    artwork_path: Path | None = None,
 ) -> Path:
     """Fetch one track's audio into dest_dir and validate it.
 
@@ -446,10 +586,17 @@ def download_audio(
         raise unavailable_error()
 
     # Best-effort: the same lookup that names the job also sizes the progress
-    # estimate. Neither is required for the download itself.
+    # estimate. Neither is required for the download itself — the child reports
+    # the same fields from its own session, and `_FetchReporter` uses whichever
+    # arrived first.
     metadata = fetch_track_metadata(track_id)
     duration_ms = metadata.duration_ms if metadata is not None else 0
     estimated_bytes = duration_ms * ESTIMATED_BYTES_PER_SECOND // 1000
+    reporter = (
+        _FetchReporter(progress_callback, estimated_bytes, on_track_metadata)
+        if progress_callback is not None or on_track_metadata is not None
+        else None
+    )
 
     out_path = dest_dir / f"{track_id}.ogg"
     args = [
@@ -461,11 +608,15 @@ def download_audio(
         "--out",
         str(out_path),
     ]
+    if artwork_path is not None:
+        # Named by the caller (a fixed .jpg under the job's results): the child
+        # only writes it when the CDN answers with real JPEG bytes.
+        args += ["--artwork", str(artwork_path)]
     try:
         result = run_grouped(
             args,
             timeout_seconds=_fetch_timeout_seconds(),
-            on_stdout_line=_progress_reporter(progress_callback, estimated_bytes),
+            on_stdout_line=reporter,
             # The credentials path goes through the environment, never argv, so
             # it cannot show up in a process listing.
             env={CREDENTIALS_FILE_ENV: str(credentials)},

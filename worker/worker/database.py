@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   owner_key TEXT NOT NULL,
   source_type TEXT NOT NULL CHECK (source_type IN ('upload', 'youtube', 'spotify')),
   source_filename TEXT,
+  -- Album the resolved source belongs to (link sources only); shown on the job
+  -- page. Nullable and app-side, like source_filename: a lookup failure just
+  -- means nothing to display.
+  source_album TEXT,
   source_object_key TEXT,
   source_path TEXT,
   source_url TEXT,
@@ -169,7 +173,7 @@ class JobQueue:
         # during the rebuild.
         self._migrate_jobs_constraints()
         self._connection.executescript(SQLITE_SCHEMA)
-        self._migrate_add_quality_column()
+        self._migrate_additive_columns()
 
     def close(self) -> None:
         self._connection.close()
@@ -234,17 +238,21 @@ class JobQueue:
         if violations:
             raise RuntimeError(f"foreign key violations after jobs rebuild: {violations!r}")
 
-    def _migrate_add_quality_column(self) -> None:
-        """Add jobs.quality to databases created before per-job quality existed.
+    def _migrate_additive_columns(self) -> None:
+        """Add jobs columns that postdate the table's first release.
 
-        Additive ALTER (no rebuild): the column is nullable and validated
-        app-side, so old rows simply read NULL = worker default.
+        Additive ALTERs (no rebuild): every one of these is nullable and
+        validated app-side, so an older row simply reads NULL — no per-job
+        quality (worker default), no source album to show. Kept in one place so
+        a new column is one entry rather than another migration method.
         """
         columns = {
             row[1] for row in self._connection.execute("PRAGMA table_info(jobs)").fetchall()
         }
         if "quality" not in columns:
             self._connection.execute("ALTER TABLE jobs ADD COLUMN quality TEXT")
+        if "source_album" not in columns:
+            self._connection.execute("ALTER TABLE jobs ADD COLUMN source_album TEXT")
 
     def claim_next_queued_job(self) -> ClaimedJob | None:
         """Atomically move the oldest queued job to processing (plan Section 11.2)."""
@@ -320,6 +328,22 @@ class JobQueue:
                 (filename, _now_ms(), job_id),
             )
         except Exception:  # noqa: BLE001, S110 - naming is cosmetic, never fatal
+            pass
+
+    def record_source_album(self, job_id: str, album: str) -> None:
+        """Store the album the source belongs to, for the job view.
+
+        Same contract as `record_source_filename`: only running jobs are
+        updated and failures are swallowed, because this is decoration — a job
+        must never fail over a missing album name.
+        """
+        try:
+            self._connection.execute(
+                "UPDATE jobs SET source_album = ?, updated_at = ? "
+                "WHERE id = ? AND status = 'processing'",
+                (album, _now_ms(), job_id),
+            )
+        except Exception:  # noqa: BLE001, S110 - decoration, never fatal
             pass
 
     def record_event(

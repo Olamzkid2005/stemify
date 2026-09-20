@@ -23,12 +23,12 @@ import pytest
 
 from worker.errors import ErrorCode
 from worker.spotify import (
-    CACHE_DIR_NAME,
     CREDENTIALS_FILE_ENV,
     DEFAULT_CREDENTIALS_FILENAME,
     DEFAULT_HTTP_TIMEOUT_SECONDS,
     SpotifyError,
     TrackMetadata,
+    cache_dir_path,
     credentials_file,
     credentials_path,
     fetch_track_metadata,
@@ -38,6 +38,7 @@ from worker.spotify import (
     resolve_title,
     spotify_credentials,
     spotify_enabled,
+    staging_credentials_path,
     unavailable_error,
 )
 
@@ -455,10 +456,21 @@ def _block_librespot(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def install_fake_login(
     monkeypatch: pytest.MonkeyPatch,
-    error: Exception | None = None,
+    error: BaseException | None = None,
     write_credentials: bool = True,
+    fail_after_write: bool = False,
+    interrupt_after_write: bool = False,
 ) -> dict[str, Any]:
-    """Inject a minimal client library that records how the login configured it."""
+    """Inject a minimal client library that records how the login configured it.
+
+    `fail_after_write` models the dangerous window: the flow already wrote its
+    credential file and then died, which is exactly when a truncating write to
+    the real path would leave a login that every later fetch reads as corrupt.
+
+    `interrupt_after_write` is the same window with a `KeyboardInterrupt`: the
+    operator abandoning a login is a realistic way to end up there, and it is
+    a `BaseException`, so only an unconditional clean-up catches it.
+    """
     seen: dict[str, Any] = {}
 
     class _ConfigurationBuilder:
@@ -492,13 +504,22 @@ def install_fake_login(
             if error is not None:
                 raise error
             seen["callback"]("https://accounts.spotify.com/authorize?fake=1")
+            staging = Path(seen["configuration"].stored_credentials_file)
+            # What the library found waiting for it: the previous login, if any.
+            seen["staging_at_create"] = (
+                staging.read_text(encoding="utf-8") if staging.is_file() else None
+            )
             if write_credentials:
                 # What the real library does on a successful authenticate():
                 # write the reusable credentials to the configured file.
-                Path(seen["configuration"].stored_credentials_file).write_text(
+                staging.write_text(
                     '{"username": "operator", "credentials": "SECRET-BLOB", "type": 1}',
                     encoding="utf-8",
                 )
+                if fail_after_write:
+                    raise RuntimeError("died after writing credentials")
+                if interrupt_after_write:
+                    raise KeyboardInterrupt("operator gave up on the login")
             return SimpleNamespace(close=lambda: seen.__setitem__("closed", True))
 
     session = SimpleNamespace(
@@ -540,15 +561,107 @@ def test_login_writes_where_the_fetch_reads_and_never_prints_the_secret(
     assert target.is_file()
     configuration = seen["configuration"]
     assert configuration.store_credentials is True
-    assert configuration.stored_credentials_file == str(target)
+    # The library writes to a staging sibling, never to the path the fetch
+    # reads back (see `login`); the swap below is what publishes it.
+    assert configuration.stored_credentials_file == str(staging_credentials_path(target))
+    assert not staging_credentials_path(target).exists()
+    assert credentials_file() == target
     # The session cache must not land in the process cwd (the client library's
-    # default) or a fetch would litter stream data next to the source.
-    assert configuration.cache_dir == str(target.parent / CACHE_DIR_NAME)
+    # default) or a fetch would litter stream data next to the source — and it
+    # must be the *one* directory the fetches share, not a second one.
+    assert configuration.cache_dir == str(cache_dir_path(target))
+    assert cache_dir_path(target).is_dir(), "the login initialises the shared cache"
     assert seen.get("closed") is True
 
     captured = capsys.readouterr()
     assert "accounts.spotify.com/authorize" in captured.out  # the operator gets the URL
     assert "SECRET-BLOB" not in captured.out + captured.err
+
+
+def test_a_relogin_keeps_the_cache_it_shares_with_running_fetches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The login is the other half of the shared session cache.
+
+    A login that runs while jobs are fetching must not disturb what they put
+    there: re-login is a documented, safe-to-repeat operation, and the cache is
+    the one piece of session state it shares with them.
+    """
+    target = tmp_path / "data" / DEFAULT_CREDENTIALS_FILENAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(target))
+    shared = cache_dir_path(target)
+    shared.mkdir(parents=True, exist_ok=True)
+    entry = shared / "chunk-from-a-running-fetch"
+    entry.write_bytes(b"cached-audio")
+
+    seen = install_fake_login(monkeypatch)
+    login(open_browser=False)
+
+    assert seen["configuration"].cache_dir == str(shared), "one cache, one path"
+    assert entry.read_bytes() == b"cached-audio", "a login never clears it"
+
+
+def test_an_interrupted_relogin_leaves_the_existing_login_intact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The login is the only shared mutable file, and it must never go missing.
+
+    Every fetch reads this one file and none of them writes it; the library's
+    own write truncates in place, so a flow that dies after writing (or a fetch
+    reading at the wrong moment) would otherwise see a half-written file and
+    report the machine as signed out from then on.
+    """
+    target = tmp_path / "creds.json"
+    target.write_text('{"username": "operator", "credentials": "OLD"}', encoding="utf-8")
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(target))
+    before = target.read_bytes()
+
+    install_fake_login(monkeypatch, write_credentials=True, fail_after_write=True)
+    with pytest.raises(SpotifyError):
+        login(open_browser=False)
+
+    assert target.read_bytes() == before, "the previous login must survive"
+    assert not staging_credentials_path(target).exists(), "no half-written file is left"
+
+
+def test_an_interrupted_login_leaves_no_credentials_behind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ctrl+C is a `BaseException`, and pressing it is a realistic outcome.
+
+    The staging file holds real credentials under a `.partial` name, so one left
+    behind by an abandoned flow is an untracked secrets file on disk. The
+    clean-up therefore has to be unconditional rather than an `except Exception`.
+    """
+    target = tmp_path / "creds.json"
+    previous = '{"username": "operator", "credentials": "OLD"}'
+    target.write_text(previous, encoding="utf-8")
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(target))
+
+    install_fake_login(monkeypatch, interrupt_after_write=True)
+    with pytest.raises(KeyboardInterrupt):
+        login(open_browser=False)
+
+    assert target.read_text(encoding="utf-8") == previous, "the live login is untouched"
+    assert not staging_credentials_path(target).exists(), "nothing left under .partial"
+
+
+def test_a_relogin_still_reuses_the_existing_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Staging must not quietly turn a re-run into a fresh interactive login."""
+    target = tmp_path / "creds.json"
+    previous = '{"username": "operator", "credentials": "OLD"}'
+    target.write_text(previous, encoding="utf-8")
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(target))
+
+    seen = install_fake_login(monkeypatch)
+    login(open_browser=False)
+
+    assert seen["staging_at_create"] == previous, "the library is given the old login"
+    assert "SECRET-BLOB" in target.read_text(encoding="utf-8"), "and the new one wins"
+    assert not staging_credentials_path(target).exists()
 
 
 def test_login_reports_a_failed_sign_in(
@@ -643,8 +756,13 @@ def test_health_reports_what_spotify_input_is_missing(
     assert "disabled" in cli._spotify_status({"librespot": True})
 
     monkeypatch.setenv("STEMIFY_SPOTIFY_ENABLED", "1")
-    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(tmp_path / "missing.json"))
-    assert "signed out" in cli._spotify_status({"librespot": True})
+    missing = tmp_path / "missing.json"
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(missing))
+    signed_out = cli._spotify_status({"librespot": True})
+    assert "signed out" in signed_out
+    # The path it looked at, so a credential written elsewhere (the login run
+    # without the app's STEMIFY_DATA_DIR) is diagnosable from `health` alone.
+    assert str(missing) in signed_out
 
     present = tmp_path / "creds.json"
     present.write_text("{}", encoding="utf-8")

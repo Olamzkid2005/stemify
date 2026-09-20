@@ -141,6 +141,12 @@ def _cancellation_checker(queue: JobQueue, job_id: str):
     return check
 
 
+# Album cover file name inside a job's results directory. Fixed (not derived
+# from the response) because the web app serves it as image/jpeg at exactly this
+# path, and the fetch child only writes it when the bytes really are a JPEG.
+ARTWORK_FILENAME = "artwork.jpg"
+
+
 def _raise_if_canceled(queue: JobQueue, job_id: str) -> None:
     """Stage-boundary cancellation check (plan Section 9.5)."""
     if queue.is_cancel_requested(job_id):
@@ -233,13 +239,33 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                     job_display_name = f"{title}.ogg"
                     queue.record_source_filename(job.id, job_display_name)
                 _progress(queue, job.id, Stage.DOWNLOADING, 12, "Streaming audio from Spotify")
+                # The fetch child reads the track's own metadata from the
+                # session it already has, so a job is still named and timed on
+                # a machine that only completed the Premium login (the Web API
+                # probe above needs an app id/secret as well).
+                fetched: dict[str, spotify.TrackMetadata | None] = {"metadata": None}
                 staged = spotify.download_audio(
                     job.source_url,
                     download_dir,
                     progress_callback=_download_progress(
                         queue, job.id, "Streaming from Spotify"
                     ),
+                    on_track_metadata=lambda metadata: fetched.__setitem__(
+                        "metadata", metadata
+                    ),
+                    # Album cover, written by the fetch child only if the CDN
+                    # answers with real JPEG bytes. It lands in the job's
+                    # results directory, so retention deletes it with the stems.
+                    artwork_path=queue.data_dir / "results" / job.id / ARTWORK_FILENAME,
                 )
+                if fetched["metadata"] is not None:
+                    if job_display_name is None:
+                        fallback = spotify.display_name(fetched["metadata"])
+                        if fallback:
+                            job_display_name = f"{fallback}.ogg"
+                            queue.record_source_filename(job.id, job_display_name)
+                    if fetched["metadata"].album:
+                        queue.record_source_album(job.id, fetched["metadata"].album)
                 _progress(
                     queue,
                     job.id,

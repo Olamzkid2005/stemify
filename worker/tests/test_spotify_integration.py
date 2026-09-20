@@ -23,6 +23,7 @@ from test_pipeline_integration import install_stub_engine, read_row
 from worker.database import JobQueue
 from worker.errors import ErrorCode
 from worker.input_audio import _require_ffmpeg_tool
+from worker.spotify import TrackMetadata
 
 try:
     FFMPEG = _require_ffmpeg_tool("ffmpeg")
@@ -80,6 +81,7 @@ def stub_fetch(
     monkeypatch: pytest.MonkeyPatch,
     media: Path,
     title: str | None = "Test Artist - Test Song",
+    fetched_metadata: TrackMetadata | None = None,
 ) -> None:
     """Replace the supervised fetch and the metadata probe.
 
@@ -87,11 +89,37 @@ def stub_fetch(
     (it supervises the fetch child), so patching it leaves the validation
     ladder, ffmpeg, and the separation path real. `resolve_title` is patched too
     so the naming assertion cannot depend on network metadata.
-    """
 
-    def fake_download(url: str, dest_dir: Path, progress_callback: Any = None) -> Path:
+    `fetched_metadata` is what the real child reports from its own session; the
+    stub delivers it through the same callback, so the naming fallback is
+    exercised rather than assumed.
+    """
+    reported = fetched_metadata or TrackMetadata(
+        track_id=TRACK_ID,
+        title="Tease Me",
+        artist="Zaylevelten",
+        album="Tease Me",
+        duration_ms=240_000,
+    )
+
+    def fake_download(
+        url: str,
+        dest_dir: Path,
+        progress_callback: Any = None,
+        on_track_metadata: Any = None,
+        artwork_path: Any = None,
+    ) -> Path:
+        if on_track_metadata is not None:
+            on_track_metadata(reported)
         if progress_callback is not None:
             progress_callback(50.0)
+        if artwork_path is not None:
+            # What the real child writes: a verified JPEG in the job's results
+            # directory, so the web app can serve it without any network call.
+            cover = Path(artwork_path)
+            cover.parent.mkdir(parents=True, exist_ok=True)
+            cover.write_bytes(b"\xff\xd8\xff\xe0" + b"cover")
+
         dest = Path(dest_dir) / f"{TRACK_ID}.ogg"
         dest.write_bytes(media.read_bytes())
         return dest
@@ -144,10 +172,48 @@ def test_spotify_job_completes_end_to_end(tmp_path: Path, monkeypatch: pytest.Mo
     assert sorted(r[0] for r in outputs) == ["archive", "instrumental", "vocals"]
 
     # Naming (roadmap A2): the metadata probe names the job after the song.
+    name, album = read_row(
+        queue.database_path,
+        "SELECT source_filename, source_album FROM jobs WHERE id = ?",
+        (job_id,),
+    )[0]
+    assert name == "Test Artist - Test Song.ogg"
+    # Richer metadata: the album rides on the job and the cover sits beside the
+    # stems, where retention deletes it with them.
+    assert album == "Tease Me"
+    assert (queue.data_dir / "results" / job_id / "artwork.jpg").read_bytes().startswith(
+        b"\xff\xd8\xff"
+    )
+    queue.close()
+
+
+def test_the_fetch_names_the_job_when_the_probe_finds_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Premium-login-only machine: no Web API app, still a named job.
+
+    `resolve_title` needs an operator-configured app id/secret and is None on
+    this machine, which used to leave every Spotify job named after nothing at
+    all. The fetch child reads the same fields from its own session.
+    """
+    from worker.job_loop import process_job
+
+    install_stub_engine(monkeypatch)
+    monkeypatch.setenv("STEMIFY_SPOTIFY_ENABLED", "1")
+    queue, job_id = seed_spotify_job(tmp_path)
+
+    media = tmp_path / f"{TRACK_ID}.ogg"
+    make_tone_ogg(media)
+    stub_fetch(monkeypatch, media, title=None)
+
+    job = queue.claim_next_queued_job()
+    assert job is not None
+    process_job(queue, job)
+
     name = read_row(
         queue.database_path, "SELECT source_filename FROM jobs WHERE id = ?", (job_id,)
     )[0][0]
-    assert name == "Test Artist - Test Song.ogg"
+    assert name == "Zaylevelten - Tease Me.ogg"
     queue.close()
 
 

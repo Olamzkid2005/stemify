@@ -184,32 +184,75 @@ pip install -r requirements-spotify.txt
 # 2. One-time interactive login. Prints the Spotify approval URL, then waits for
 #    the local callback on http://127.0.0.1:5588/login. Add --no-browser to print
 #    the URL instead of opening it. Re-running reuses the existing credentials.
+#
+#    Run it against the SAME data directory the app uses. Credentials live at
+#    $STEMIFY_DATA_DIR/spotify-credentials.json, and when that variable is unset
+#    the fallback is ./data relative to the current directory — which here is
+#    worker/data. start.sh exports an absolute STEMIFY_DATA_DIR from .env, so
+#    running the login without it writes a file the app never reads, and every
+#    Spotify job keeps reporting "signed out". Loading .env first is the fix:
+set -a; . ../.env; set +a
 python -m worker.cli spotify-login
 
-# 3. Let the worker accept Spotify links.
+# 3. Let the worker accept Spotify links. For the app this is the kill switch in
+#    .env (`STEMIFY_SPOTIFY_ENABLED=1`), which start.sh exports to this process.
 STEMIFY_SPOTIFY_ENABLED=1 python -m worker.job_loop
 ```
 
-The login writes exactly one file, `data/spotify-credentials.json`, and nothing
-about it reaches the web app or the database. Keep it out of version control (it
-is gitignored); the fetch child never rewrites it, so a job can never drop a
-stray credentials file next to the source.
+The login writes exactly one file, `$STEMIFY_DATA_DIR/spotify-credentials.json`
+(`data/spotify-credentials.json` for the app's default data directory), and
+nothing about it reaches the web app or the database. Keep it out of version
+control (it is gitignored); the fetch child never rewrites it, so a job can never
+drop a stray credentials file next to the source. The login publishes it
+atomically (through a `.partial` sibling), so re-running it while jobs are
+fetching cannot be observed as a half-written file.
+
+The client library's session cache lives in `spotify-cache/` beside that file
+(`data/spotify-cache/` by default) and is **shared by all concurrent fetches**,
+which is deliberate: one warm cache instead of a cold one per job. It is safe
+to leave alone and safe to delete — the worker only creates the directory, never
+writes into or cleans it, and the library's own cache clean-up is switched off
+so one fetch can never delete what another is reading (`docs/SPOTIFY_PLAN.md`,
+"one session cache is shared by every concurrent fetch").
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `STEMIFY_SPOTIFY_ENABLED` | `0` | Kill switch. Spotify input is refused until this is set. |
 | `STEMIFY_SPOTIFY_CREDENTIALS_FILE` | `$STEMIFY_DATA_DIR/spotify-credentials.json` | Cached login. The library also reads a Rust `librespot --enable-oauth` credentials file, so an existing one can be pointed at directly. |
-| `STEMIFY_SPOTIFY_CLIENT_ID` / `STEMIFY_SPOTIFY_CLIENT_SECRET` | unset | Optional free Web API app, used **only** to name a job after the track title. Without it, jobs are named from the track id. |
+| `STEMIFY_SPOTIFY_CLIENT_ID` / `STEMIFY_SPOTIFY_CLIENT_SECRET` | unset | Optional free Web API app. **Not required**: the fetch child reads the title, artist, album and duration from the Premium session it already has, so a job is named `Artist - Title` and its download reports a percentage with no extra setup. The only thing this adds is a display name a few seconds earlier, from the pre-download probe. |
 | `STEMIFY_SPOTIFY_FETCH_TIMEOUT_SECONDS` | `600` | Hard per-track deadline, enforced by killing the fetch's process tree. |
-| `STEMIFY_SPOTIFY_HTTP_TIMEOUT_SECONDS` | `15` | Metadata request timeout. |
+| `STEMIFY_SPOTIFY_HTTP_TIMEOUT_SECONDS` | `15` | Web API metadata request timeout (only used when the two variables above are set). |
 
 `python -m worker.cli health` says which of these is missing: `unavailable`
 (client not installed), `disabled` (kill switch off), `signed out` (no
-credentials file), or `ready`.
+credentials file — it names the path it looked at, which is how a data-directory
+mismatch shows up), or `ready`. The same `health` line is what the app's
+startup checks read, because it runs the worker's own check.
+
+With the kill switch off, the web app hides the Spotify tab and refuses a
+Spotify job rather than queueing one the worker would refuse on claim
+(`apps/web/lib/capabilities.ts`). The worker remains the final authority: it
+re-checks the switch and the credentials before fetching anything.
 
 The fetch keeps Spotify's native Ogg Vorbis stream — nothing is re-encoded
 before separation — and the child process receives only the validated
 22-character track id, never the link that was pasted.
+
+Before it streams, the child prints one `metadata: {…}` line with the track's
+title, artists, album and duration, read from the same signed-in session. That
+is what names the job (`Artist - Title.ogg`, so the stems and the ZIP inherit
+it), what fills the album chip on the job page, and what lets the parent turn
+the child's byte counts into a real percentage: 0% up to the download
+finishing, instead of a silent twelve-minute-looking wait at the stage's
+opening value. It is best-effort — a child that cannot read the metadata (or a
+client library without that call) fetches exactly as before.
+
+Album art is fetched too, when the metadata carries a cover: `--artwork` names
+the destination (a fixed `artwork.jpg` in the job's `results/` directory) and
+the child writes a file there only after checking the response really starts
+with the JPEG signature, because the web app serves that path as `image/jpeg`.
+It comes from Spotify's public image CDN and is stored locally, so the browser
+never contacts anything but this app.
 
 The web app has its **Spotify Link** tab since milestone S4
 (`docs/SPOTIFY_PLAN.md`), so a link pasted there becomes a normal job. The tab

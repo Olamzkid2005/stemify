@@ -118,6 +118,31 @@ def test_fixed_arguments_and_env_only_credentials(
     assert calls[0]["timeout_seconds"] >= 60
 
 
+def test_the_artwork_destination_travels_as_an_explicit_flag(
+    dest: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cover's destination is an argument, like every other path."""
+    calls = stub_child(monkeypatch, lambda args, on_stdout_line=None: CommandResult(0, "", ""))
+    artwork = tmp_path / "results" / "artwork.jpg"
+
+    with pytest.raises(SpotifyError):
+        download_audio(TRACK_URL, dest, artwork_path=artwork)
+
+    args = calls[0]["args"]
+    assert args[-2] == "--artwork"
+    assert args[-1] == str(artwork)
+
+
+def test_no_artwork_destination_adds_no_flag(dest: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a destination the child is never asked to fetch a cover."""
+    calls = stub_child(monkeypatch, lambda args, on_stdout_line=None: CommandResult(0, "", ""))
+
+    with pytest.raises(SpotifyError):
+        download_audio(TRACK_URL, dest)
+
+    assert "--artwork" not in calls[0]["args"]
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -275,11 +300,18 @@ def test_byte_counts_become_a_monotonic_percentage(
 def test_no_duration_means_no_percentage(
     dest: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Without a known duration, reporting a percentage would be invented."""
+    """Without a duration from *either* source, a percentage would be invented.
+
+    The child's lines still have to be inspected (a duration can arrive on any
+    of them), so the reporter is installed — it must simply stay silent on byte
+    counts until a real duration has been seen.
+    """
     seen: list[float] = []
 
     def handler(args: Any, on_stdout_line: Any = None) -> Any:
-        assert on_stdout_line is None
+        assert on_stdout_line is not None
+        for line in ("progress: 2400000\n", "metadata: not-json\n", "progress: 10\n"):
+            on_stdout_line(line)
         return CommandResult(0, "", "")
 
     stub_child(monkeypatch, handler)
@@ -287,6 +319,105 @@ def test_no_duration_means_no_percentage(
         download_audio(TRACK_URL, dest, progress_callback=seen.append)
 
     assert seen == []
+
+
+def _child_metadata_line(*, duration_ms: int = DURATION_MS) -> str:
+    """The single line the fetch child prints from its own session (S2)."""
+    payload = (
+        f'{{"track_id": "{TRACK_ID}", "title": "Tease Me", '
+        f'"artist": "Zaylevelten", "duration_ms": {duration_ms}}}'
+    )
+    return f"metadata: {payload}\n"
+
+
+def test_child_metadata_supplies_the_duration_the_probe_could_not(
+    dest: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The child's own metadata is a real duration, not an invented one.
+
+    This is the machine that completed the Premium login but configured no Web
+    API application: without the child's line, an entire download would report
+    no progress at all.
+    """
+    seen: list[float] = []
+    learnt: list[TrackMetadata] = []
+
+    def handler(args: Any, on_stdout_line: Any = None) -> Any:
+        on_stdout_line(_child_metadata_line())
+        on_stdout_line("progress: 2400000\n")  # 25% of the child's duration
+        on_stdout_line(f"progress: {ESTIMATED_BYTES}\n")  # 100% -> capped at 99
+        return CommandResult(0, "", "")
+
+    stub_child(monkeypatch, handler)
+    with pytest.raises(SpotifyError):
+        download_audio(
+            TRACK_URL,
+            dest,
+            progress_callback=seen.append,
+            on_track_metadata=learnt.append,
+        )
+
+    assert seen == [25.0, 99.0]
+    assert [(item.title, item.artist, item.duration_ms) for item in learnt] == [
+        ("Tease Me", "Zaylevelten", DURATION_MS)
+    ]
+
+
+def test_child_metadata_is_delivered_without_a_progress_callback(
+    dest: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Naming only needs the metadata, so no progress callback is required."""
+    learnt: list[TrackMetadata] = []
+
+    def handler(args: Any, on_stdout_line: Any = None) -> Any:
+        assert on_stdout_line is not None
+        on_stdout_line(_child_metadata_line())
+        return CommandResult(0, "", "")
+
+    stub_child(monkeypatch, handler)
+    with pytest.raises(SpotifyError):
+        download_audio(TRACK_URL, dest, on_track_metadata=learnt.append)
+
+    assert [item.track_id for item in learnt] == [TRACK_ID]
+
+
+def test_a_child_metadata_line_without_a_duration_is_ignored(
+    dest: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A title with no duration names the job but must not authorise math."""
+    seen: list[float] = []
+    learnt: list[TrackMetadata] = []
+
+    def handler(args: Any, on_stdout_line: Any = None) -> Any:
+        on_stdout_line(_child_metadata_line(duration_ms=0))
+        on_stdout_line("progress: 2400000\n")
+        return CommandResult(0, "", "")
+
+    stub_child(monkeypatch, handler)
+    with pytest.raises(SpotifyError):
+        download_audio(
+            TRACK_URL,
+            dest,
+            progress_callback=seen.append,
+            on_track_metadata=learnt.append,
+        )
+
+    assert [item.duration_ms for item in learnt] == [0]
+    assert seen == []
+
+
+def test_no_reporter_is_installed_when_nobody_is_listening(
+    dest: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No callback, no line reader: nothing is parsed for nothing."""
+
+    def handler(args: Any, on_stdout_line: Any = None) -> Any:
+        assert on_stdout_line is None
+        return CommandResult(0, "", "")
+
+    stub_child(monkeypatch, handler)
+    with pytest.raises(SpotifyError):
+        download_audio(TRACK_URL, dest)
 
 
 # ---------------------------------------------------------------------------

@@ -99,14 +99,18 @@ def command_health(_args: argparse.Namespace) -> int:
 
 def _spotify_status(packages: dict[str, bool]) -> str:
     """One line describing what, if anything, Spotify input is still missing."""
-    from worker.spotify import credentials_file, spotify_enabled
+    from worker.spotify import credentials_file, credentials_path, spotify_enabled
 
     if not packages.get("librespot", False):
         return "unavailable (optional; pip install -r worker/requirements-spotify.txt)"
     if not spotify_enabled():
         return "disabled (set STEMIFY_SPOTIFY_ENABLED=1 to accept Spotify links)"
     if credentials_file() is None:
-        return "signed out (run: python -m worker.cli spotify-login)"
+        # Name the file that was looked for. The login writes wherever
+        # STEMIFY_DATA_DIR points (else ./data under the current directory) while
+        # the app passes an absolute path, so a mismatch shows up here as a
+        # permanent "signed out" instead of a silent one.
+        return f"signed out (run: python -m worker.cli spotify-login; looked in {credentials_path()})"
     return "ready"
 
 
