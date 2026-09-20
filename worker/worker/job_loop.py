@@ -22,6 +22,7 @@ import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
+from worker import spotify
 from worker.database import ClaimedJob, JobQueue
 from worker.encoding import OutputError
 from worker.errors import ErrorCode
@@ -79,23 +80,30 @@ def _progress(
     queue.update_progress(job_id, stage, progress, detail=detail)
 
 
-# A YouTube download owns this slice of the DOWNLOADING stage. One event per
+# A link download owns this slice of the DOWNLOADING stage. One event per
 # whole percent keeps job_events small while the job page still shows the
 # download moving (a full-length song used to sit at one frozen percentage).
 _DOWNLOAD_START = 12
 _DOWNLOAD_END = 24
 
 
-def _download_progress(queue: JobQueue, job_id: str) -> Callable[[float], None]:
-    """Map yt-dlp's download percentage onto the job's DOWNLOADING progress."""
+def _download_progress(
+    queue: JobQueue, job_id: str, label: str = "Downloading audio as MP3"
+) -> Callable[[float], None]:
+    """Map a downloader's percentage onto the job's DOWNLOADING progress.
+
+    `label` names the work being done; each link source describes its own
+    transfer (a YouTube job downloads an MP3, a Spotify job streams the
+    original audio).
+    """
     state = {"value": _DOWNLOAD_START}
 
     def report(percent: float) -> None:
         bounded = max(0.0, min(100.0, percent))
         span = _DOWNLOAD_END - _DOWNLOAD_START
         value = _DOWNLOAD_START + round(bounded / 100 * span)
-        # yt-dlp can restart a format and report a lower percentage; progress
-        # must never move backwards for the user.
+        # A downloader can restart a format and report a lower percentage;
+        # progress must never move backwards for the user.
         if value <= state["value"]:
             return
         state["value"] = value
@@ -104,7 +112,7 @@ def _download_progress(queue: JobQueue, job_id: str) -> Callable[[float], None]:
             job_id,
             Stage.DOWNLOADING,
             value,
-            f"Downloading audio as MP3 — {int(bounded)}%",
+            f"{label} — {int(bounded)}%",
         )
 
     return report
@@ -119,7 +127,11 @@ def _record_failure(queue: JobQueue, job: ClaimedJob, code: ErrorCode, error: Ex
     """
     queue.record_event(job.id, "failure_detail", f"{code.value}: {error}")
     print(f"worker: job {job.id} failed with {code.value}", flush=True)
-    queue.fail_job(job.id, code, _public_message(code))
+    # A source adapter may carry a more specific user-facing message than the
+    # code's generic text (Spotify tells "switched off" from "not set up");
+    # anything without one falls back to the code.
+    public = getattr(error, "public_message", None) or _public_message(code)
+    queue.fail_job(job.id, code, public)
 
 
 def _cancellation_checker(queue: JobQueue, job_id: str):
@@ -168,10 +180,10 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
         staged: Path | None = None
         source: Path | None = None
 
-        if job.source_type == "youtube":
-            # Optional YouTube input (plan Task 14 / Section 9.6): the worker
-            # downloads with controlled yt-dlp arguments into the job temp
-            # directory, then the normal validation/separation path runs on it.
+        if job.source_type in ("youtube", "spotify"):
+            # Optional link inputs (plan Task 14 / Section 9.6, Spotify plan S3):
+            # the worker fetches into the job temp directory with controlled
+            # arguments, then the normal validation/separation path runs on it.
             if not job.source_url:
                 queue.fail_job(job.id, ErrorCode.DOWNLOAD_FAILED, _public_message(ErrorCode.DOWNLOAD_FAILED))
                 return
@@ -207,6 +219,34 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                     24,
                     "MP3 downloaded; checking the audio",
                 )
+            elif job.source_type == "spotify":
+                # Spotify input (spotify plan S3): the supervised fetch child
+                # streams the native Ogg Vorbis into the job temp directory,
+                # then the same validation/separation path runs on it.
+                _progress(queue, job.id, Stage.DOWNLOADING, 8, "Checking the Spotify link")
+                download_dir = job_dir / "download"
+                download_dir.mkdir()
+                # Same best-effort naming as YouTube (roadmap A2): the metadata
+                # probe is optional, so a failed lookup keeps the track id.
+                title = spotify.resolve_title(job.source_url)
+                if title:
+                    job_display_name = f"{title}.ogg"
+                    queue.record_source_filename(job.id, job_display_name)
+                _progress(queue, job.id, Stage.DOWNLOADING, 12, "Streaming audio from Spotify")
+                staged = spotify.download_audio(
+                    job.source_url,
+                    download_dir,
+                    progress_callback=_download_progress(
+                        queue, job.id, "Streaming from Spotify"
+                    ),
+                )
+                _progress(
+                    queue,
+                    job.id,
+                    Stage.DOWNLOADING,
+                    24,
+                    "Audio streamed; checking the audio",
+                )
             else:
                 _progress(queue, job.id, Stage.VALIDATING, 10, "Checking the uploaded file")
                 inbox = job_dir / "source"
@@ -217,7 +257,7 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                 except OSError:  # filesystems without symlink support (e.g. Windows)
                     shutil.copy(source, staged)
 
-            if job.source_type != "youtube":
+            if job.source_type == "upload":
                 _progress(queue, job.id, Stage.VALIDATING, 15, "Validating the uploaded audio")
 
             _progress(queue, job.id, Stage.PREPARING_AUDIO, 25, "Preparing audio for separation")

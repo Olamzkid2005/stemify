@@ -86,6 +86,15 @@ INCOMPLETE_SUFFIXES = (".part", ".temp")
 class SpotifyError(InputAudioError):
     """Spotify-stage failure carrying a stable public error code (S2 onwards)."""
 
+    def __init__(
+        self, code: ErrorCode, detail: str, public_message: str | None = None
+    ) -> None:
+        super().__init__(code, detail)
+        # Optional user-facing text for the cases the job loop cannot tell apart
+        # from the error code alone ("switched off" vs "not set up"); None means
+        # the code's generic message. `detail` stays operator-only.
+        self.public_message = public_message
+
 
 def spotify_enabled() -> bool:
     """Local kill switch: Spotify input stays off until the operator opts in.
@@ -365,12 +374,25 @@ def resolve_title(url: str) -> str | None:
 
 
 def unavailable_error() -> SpotifyError:
-    """The failure to raise when a Spotify job reaches a machine that cannot serve it."""
+    """The failure to raise when a Spotify job reaches a machine that cannot serve it.
+
+    Both cases carry public text: the generic DOWNLOAD_FAILED message would
+    hide the one thing the operator has to act on.
+    """
     if not spotify_enabled():
         return SpotifyError(
-            ErrorCode.DOWNLOAD_FAILED, "Spotify input is disabled on this machine"
+            ErrorCode.DOWNLOAD_FAILED,
+            "Spotify input is disabled on this machine",
+            public_message="Spotify input is switched off on this machine.",
         )
-    return SpotifyError(ErrorCode.DOWNLOAD_FAILED, "Spotify input is not configured on this machine")
+    return SpotifyError(
+        ErrorCode.DOWNLOAD_FAILED,
+        "Spotify input is not configured on this machine",
+        public_message=(
+            "Spotify input is not set up on this machine. "
+            "See the Spotify section of worker/README.md."
+        ),
+    )
 
 
 def _progress_reporter(
