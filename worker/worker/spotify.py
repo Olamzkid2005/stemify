@@ -25,6 +25,7 @@ documented as the batch fan-out follow-up (plan Section 9).
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import re
@@ -32,6 +33,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
@@ -65,6 +67,10 @@ DEFAULT_HTTP_TIMEOUT_SECONDS = 15
 # which the librespot CLI does well) live outside the web app and database.
 CREDENTIALS_FILE_ENV = "STEMIFY_SPOTIFY_CREDENTIALS_FILE"
 DEFAULT_CREDENTIALS_FILENAME = "spotify-credentials.json"
+# Session cache (audio keys/chunks). The client library defaults to
+# `<cwd>/cache`, which would dump stream data next to the source; the login and
+# the fetch child both keep it beside the credentials instead.
+CACHE_DIR_NAME = "spotify-cache"
 DEFAULT_FETCH_TIMEOUT_SECONDS = 600
 # ~320 kbps Vorbis is about 40 KB/s. Only ever used to turn the child's byte
 # count into an approximate percentage, because a stream's length is unknown
@@ -140,20 +146,89 @@ def spotify_credentials() -> tuple[str, str] | None:
     return client_id, client_secret
 
 
+def credentials_path() -> Path:
+    """Where credentials live, whether or not they exist yet.
+
+    Single source of truth: `worker.cli spotify-login` writes here and
+    `download_audio` reads here, so the two can never drift apart.
+    """
+    raw = os.environ.get(CREDENTIALS_FILE_ENV, "").strip()
+    if raw:
+        return Path(raw)
+    data_dir = os.environ.get("STEMIFY_DATA_DIR") or Path.cwd() / "data"
+    return Path(data_dir) / DEFAULT_CREDENTIALS_FILENAME
+
+
 def credentials_file() -> Path | None:
-    """The operator's cached client credentials, or None when there are none.
+    """The operator's cached credentials, or None when there are none.
 
     Same data-directory convention as the queue (`STEMIFY_DATA_DIR`, else
     `./data`). The file is deliberately outside the web app's reach: it holds a
     Spotify login, and nothing about job input can influence its location.
     """
-    raw = os.environ.get(CREDENTIALS_FILE_ENV, "").strip()
-    if raw:
-        candidate = Path(raw)
-    else:
-        data_dir = os.environ.get("STEMIFY_DATA_DIR") or Path.cwd() / "data"
-        candidate = Path(data_dir) / DEFAULT_CREDENTIALS_FILENAME
+    candidate = credentials_path()
     return candidate if candidate.is_file() else None
+
+
+def login(*, open_browser: bool = True) -> Path:
+    """One-time interactive login; caches reusable credentials for later jobs.
+
+    Spotify audio needs a Premium session, so this is deliberately a manual,
+    operator-run step: the OAuth flow serves a callback on 127.0.0.1 and needs
+    a browser, and the resulting file is the only thing the worker keeps. The
+    library's own stored-file reader accepts both its Python format and the
+    Rust `librespot` CLI's, so either tool can produce it.
+
+    Safe to re-run: when credentials already exist the library reuses them
+    instead of asking again. Never prints the credential contents.
+    """
+    try:
+        from librespot.core import Session
+    except ImportError as error:
+        raise SpotifyError(
+            ErrorCode.DOWNLOAD_FAILED,
+            "the Spotify client library is not installed: "
+            "pip install -r worker/requirements-spotify.txt",
+        ) from error
+
+    target = credentials_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    def show_url(url: str) -> None:
+        # Flushed: this must be on screen before the flow blocks on the callback,
+        # even when the output is redirected to a file rather than a terminal.
+        print("Approve Stemify for your account in a browser (Premium required):", flush=True)
+        print(f"  {url}", flush=True)
+        if open_browser:
+            webbrowser.open(url)
+
+    configuration = (
+        Session.Configuration.Builder()
+        # The one place credentials may be written, and only to the path the
+        # fetch path reads back.
+        .set_store_credentials(True)
+        .set_stored_credential_file(str(target))
+        .set_cache_dir(str(target.parent / CACHE_DIR_NAME))
+        .build()
+    )
+    try:
+        session = Session.Builder(configuration).oauth(show_url).create()
+    except Exception as error:  # any sign-in failure becomes one operator-facing message
+        raise SpotifyError(
+            ErrorCode.DOWNLOAD_FAILED,
+            f"Spotify sign-in failed: {type(error).__name__}: {error}",
+        ) from error
+    # Releasing the connection is best-effort: the credentials are already on
+    # disk, so a close failure must not turn a successful login into an error.
+    with contextlib.suppress(Exception):
+        session.close()
+
+    if not target.is_file():
+        raise SpotifyError(
+            ErrorCode.DOWNLOAD_FAILED,
+            "the client library stored no credentials; nothing was configured",
+        )
+    return target
 
 
 def _fetch_timeout_seconds() -> int:

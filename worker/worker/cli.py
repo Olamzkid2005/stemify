@@ -2,6 +2,7 @@
 
     python -m worker.cli health
     python -m worker.cli cleanup
+    python -m worker.cli spotify-login
     python -m worker.cli separate --input ./fixtures/song.mp3 \
         --mode vocals_instrumental --format mp3 --output ./artifacts
 """
@@ -27,8 +28,9 @@ def _check_ffmpeg() -> tuple[bool, str]:
 
 def _check_python_packages() -> dict[str, bool]:
     results = {}
-    # yt-dlp is optional (YouTube input only); report it, never gate on it.
-    for module in ("numpy", "torch", "torchaudio", "soundfile", "demucs", "yt_dlp"):
+    # yt-dlp and librespot are optional (YouTube/Spotify input only); report
+    # them, never gate on them.
+    for module in ("numpy", "torch", "torchaudio", "soundfile", "demucs", "yt_dlp", "librespot"):
         try:
             __import__(module)
             results[module] = True
@@ -91,7 +93,21 @@ def command_health(_args: argparse.Namespace) -> int:
     print(f"control plane: {'ready' if core_ok else 'NOT READY'}")
     print(f"separation engine: {'ready' if engine_ok else 'NOT READY (pip install -r worker/requirements.txt)'}")
     print(f"youtube input: {'ready' if youtube_ok else 'unavailable (optional; pip install yt-dlp)'}")
+    print(f"spotify input: {_spotify_status(packages)}")
     return 0 if core_ok else 1
+
+
+def _spotify_status(packages: dict[str, bool]) -> str:
+    """One line describing what, if anything, Spotify input is still missing."""
+    from worker.spotify import credentials_file, spotify_enabled
+
+    if not packages.get("librespot", False):
+        return "unavailable (optional; pip install -r worker/requirements-spotify.txt)"
+    if not spotify_enabled():
+        return "disabled (set STEMIFY_SPOTIFY_ENABLED=1 to accept Spotify links)"
+    if credentials_file() is None:
+        return "signed out (run: python -m worker.cli spotify-login)"
+    return "ready"
 
 
 def command_separate(args: argparse.Namespace) -> int:
@@ -140,6 +156,24 @@ def command_separate(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_spotify_login(args: argparse.Namespace) -> int:
+    """One-time interactive Spotify sign-in (worker/README.md).
+
+    Operator-run and interactive by design: it needs a browser and a Premium
+    account, and it is the only path that writes Spotify credentials.
+    """
+    from worker.spotify import SpotifyError, login
+
+    try:
+        path = login(open_browser=not args.no_browser)
+    except SpotifyError as error:
+        print(f"error [{error.code.value}]: {error}", file=sys.stderr)
+        return 1
+    print(f"Spotify credentials stored in {path}")
+    print("Set STEMIFY_SPOTIFY_ENABLED=1 to accept Spotify links (see worker/README.md).")
+    return 0
+
+
 def command_cleanup(args: argparse.Namespace) -> int:
     """Run one idempotent cleanup pass (plan Task 13 / Section 19.3)."""
     from worker.cleanup import run_cleanup
@@ -165,6 +199,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     cleanup = subparsers.add_parser("cleanup", help="delete expired jobs, uploads, and stale temp dirs")
     cleanup.set_defaults(func=command_cleanup)
+
+    spotify_login = subparsers.add_parser(
+        "spotify-login",
+        help="one-time Spotify sign-in; caches credentials for Spotify input",
+    )
+    spotify_login.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="print the approval URL instead of opening a browser",
+    )
+    spotify_login.set_defaults(func=command_spotify_login)
 
     separate = subparsers.add_parser("separate", help="one-shot separation of a local file")
     separate.add_argument("--input", required=True, help="path to a supported audio file")

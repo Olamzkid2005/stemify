@@ -1,0 +1,23 @@
+# Optional: Spotify input (Spotify plan, milestones S1-S3).
+#
+#   pip install -r requirements-spotify.txt
+#
+# Why this is separate from requirements.txt: using it needs a **Premium**
+# Spotify account and a one-time interactive login, so it can never be
+# exercised by CI or a fresh clone — and CI installing requirements.txt must
+# not start compiling it. It also carries awkward transitive dependencies:
+#
+#   * librespot pins `protobuf==3.20.1`;
+#   * it declares `PyOgg`, which publishes Windows wheels only. librespot
+#     0.0.10 never imports PyOgg (verified: no reference anywhere in the
+#     package), so a platform without a PyOgg wheel installs the parts it
+#     actually imports instead:
+#
+#       pip install --no-deps librespot
+#       pip install defusedxml protobuf==3.20.1 pycryptodomex requests \
+#           websocket-client zeroconf
+#
+# Without this package Spotify jobs fail with DOWNLOAD_FAILED (fail safely)
+# and `python -m worker.cli health` reports "spotify input: unavailable".
+# Setup (install, one-time login, environment): see worker/README.md.
+librespot

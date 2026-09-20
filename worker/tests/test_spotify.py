@@ -1,25 +1,39 @@
-"""Spotify plan milestone S1: link policy, kill switch and metadata probe.
+"""Spotify plan milestones S1 and S2.5: link policy, metadata probe, login.
 
 Pure unit tests, no network: the module's single network seam
 (`worker.spotify._request_json`) is stubbed, and the tests that must prove
 "nothing leaves the machine" assert that the seam was never called at all.
-Audio acquisition (librespot) is milestone S2 and is not covered here.
+Audio acquisition is S2 (`tests/test_spotify_fetch.py`) and the operator login
+is S2.5; the login tests here stub the client library, so they pin the
+credential location and guard rails without a Spotify account or a browser.
 """
 
 from __future__ import annotations
 
+import argparse
 import base64
+import builtins
+import sys
 import urllib.error
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
 
 from worker.errors import ErrorCode
 from worker.spotify import (
+    CACHE_DIR_NAME,
+    CREDENTIALS_FILE_ENV,
+    DEFAULT_CREDENTIALS_FILENAME,
     DEFAULT_HTTP_TIMEOUT_SECONDS,
+    SpotifyError,
     TrackMetadata,
+    credentials_file,
+    credentials_path,
     fetch_track_metadata,
     is_allowed_spotify_url,
+    login,
     parse_track_id,
     resolve_title,
     spotify_credentials,
@@ -393,3 +407,246 @@ def test_unavailable_error_distinguishes_disabled_from_unconfigured(
     unconfigured = unavailable_error()
     assert unconfigured.code == ErrorCode.DOWNLOAD_FAILED
     assert "not configured" in str(unconfigured)
+
+
+# ---------------------------------------------------------------------------
+# Operator login and credential location (milestone S2.5)
+# ---------------------------------------------------------------------------
+
+
+def test_credentials_path_defaults_under_the_data_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv(CREDENTIALS_FILE_ENV, raising=False)
+    monkeypatch.setenv("STEMIFY_DATA_DIR", str(tmp_path))
+    assert credentials_path() == tmp_path / DEFAULT_CREDENTIALS_FILENAME
+
+
+def test_credentials_path_honors_the_operator_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    override = tmp_path / "elsewhere" / "login.json"
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(override))
+    assert credentials_path() == override
+
+
+def test_credentials_file_reports_the_same_location_the_login_writes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One path, not two guesses: the fetch reads exactly where the login wrote."""
+    target = tmp_path / "creds.json"
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(target))
+    assert credentials_file() is None  # not logged in yet
+    target.write_text("{}", encoding="utf-8")
+    assert credentials_file() == credentials_path() == target
+
+
+def _block_librespot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make `import librespot` fail, whatever is installed on the machine."""
+    real_import = builtins.__import__
+
+    def blocked(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "librespot" or name.startswith("librespot."):
+            raise ImportError("blocked for test")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked)
+
+
+def install_fake_login(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception | None = None,
+    write_credentials: bool = True,
+) -> dict[str, Any]:
+    """Inject a minimal client library that records how the login configured it."""
+    seen: dict[str, Any] = {}
+
+    class _ConfigurationBuilder:
+        def __init__(self) -> None:
+            self.settings: dict[str, Any] = {}
+
+        def set_store_credentials(self, value: Any) -> Any:
+            self.settings["store_credentials"] = value
+            return self
+
+        def set_stored_credential_file(self, value: Any) -> Any:
+            self.settings["stored_credentials_file"] = value
+            return self
+
+        def set_cache_dir(self, value: Any) -> Any:
+            self.settings["cache_dir"] = value
+            return self
+
+        def build(self) -> Any:
+            return SimpleNamespace(**self.settings)
+
+    class _Builder:
+        def __init__(self, configuration: Any) -> None:
+            seen["configuration"] = configuration
+
+        def oauth(self, callback: Any) -> Any:
+            seen["callback"] = callback
+            return self
+
+        def create(self) -> Any:
+            if error is not None:
+                raise error
+            seen["callback"]("https://accounts.spotify.com/authorize?fake=1")
+            if write_credentials:
+                # What the real library does on a successful authenticate():
+                # write the reusable credentials to the configured file.
+                Path(seen["configuration"].stored_credentials_file).write_text(
+                    '{"username": "operator", "credentials": "SECRET-BLOB", "type": 1}',
+                    encoding="utf-8",
+                )
+            return SimpleNamespace(close=lambda: seen.__setitem__("closed", True))
+
+    session = SimpleNamespace(
+        Builder=_Builder,
+        Configuration=SimpleNamespace(Builder=_ConfigurationBuilder),
+    )
+    core = ModuleType("librespot.core")
+    core.Session = session  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "librespot", ModuleType("librespot"))
+    monkeypatch.setitem(sys.modules, "librespot.core", core)
+    return seen
+
+
+def test_login_without_the_client_library_points_at_the_install_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = tmp_path / "creds.json"
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(target))
+    _block_librespot(monkeypatch)
+
+    with pytest.raises(SpotifyError) as excinfo:
+        login(open_browser=False)
+
+    assert excinfo.value.code == ErrorCode.DOWNLOAD_FAILED
+    assert "requirements-spotify.txt" in str(excinfo.value)
+    assert not target.exists()
+
+
+def test_login_writes_where_the_fetch_reads_and_never_prints_the_secret(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen = install_fake_login(monkeypatch)
+    target = tmp_path / "data" / DEFAULT_CREDENTIALS_FILENAME
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(target))
+
+    path = login(open_browser=False)
+
+    assert path == target
+    assert target.is_file()
+    configuration = seen["configuration"]
+    assert configuration.store_credentials is True
+    assert configuration.stored_credentials_file == str(target)
+    # The session cache must not land in the process cwd (the client library's
+    # default) or a fetch would litter stream data next to the source.
+    assert configuration.cache_dir == str(target.parent / CACHE_DIR_NAME)
+    assert seen.get("closed") is True
+
+    captured = capsys.readouterr()
+    assert "accounts.spotify.com/authorize" in captured.out  # the operator gets the URL
+    assert "SECRET-BLOB" not in captured.out + captured.err
+
+
+def test_login_reports_a_failed_sign_in(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    install_fake_login(monkeypatch, error=RuntimeError("bad login"))
+    target = tmp_path / "creds.json"
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(target))
+
+    with pytest.raises(SpotifyError) as excinfo:
+        login(open_browser=False)
+
+    assert excinfo.value.code == ErrorCode.DOWNLOAD_FAILED
+    assert "sign-in failed" in str(excinfo.value)
+    assert not target.exists()
+
+
+def test_login_refuses_an_empty_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A flow that returns without storing anything must not look like success."""
+    install_fake_login(monkeypatch, write_credentials=False)
+    target = tmp_path / "creds.json"
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(target))
+
+    with pytest.raises(SpotifyError) as excinfo:
+        login(open_browser=False)
+
+    assert excinfo.value.code == ErrorCode.DOWNLOAD_FAILED
+    assert not target.exists()
+    assert "no credentials" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# CLI wiring (milestone S2.5)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_exposes_spotify_login() -> None:
+    from worker.cli import build_parser
+
+    args = build_parser().parse_args(["spotify-login", "--no-browser"])
+    assert args.no_browser is True
+    assert callable(args.func)
+
+
+def test_spotify_login_command_reports_where_credentials_went(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from worker import cli
+
+    target = tmp_path / "creds.json"
+    seen: dict[str, Any] = {}
+
+    def fake_login(*, open_browser: bool = True) -> Path:
+        seen["open_browser"] = open_browser
+        return target
+
+    monkeypatch.setattr("worker.spotify.login", fake_login)
+    code = cli.command_spotify_login(argparse.Namespace(no_browser=True))
+
+    assert code == 0
+    assert seen["open_browser"] is False  # --no-browser is honored
+    assert str(target) in capsys.readouterr().out
+
+
+def test_spotify_login_command_fails_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from worker import cli
+
+    def failing_login(**kwargs: Any) -> Path:
+        raise SpotifyError(ErrorCode.DOWNLOAD_FAILED, "the Spotify client library is not installed")
+
+    monkeypatch.setattr("worker.spotify.login", failing_login)
+    code = cli.command_spotify_login(argparse.Namespace(no_browser=True))
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "DOWNLOAD_FAILED" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_health_reports_what_spotify_input_is_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from worker import cli
+
+    assert cli._spotify_status({"librespot": False}).startswith("unavailable")
+
+    monkeypatch.setenv("STEMIFY_SPOTIFY_ENABLED", "0")
+    assert "disabled" in cli._spotify_status({"librespot": True})
+
+    monkeypatch.setenv("STEMIFY_SPOTIFY_ENABLED", "1")
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(tmp_path / "missing.json"))
+    assert "signed out" in cli._spotify_status({"librespot": True})
+
+    present = tmp_path / "creds.json"
+    present.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv(CREDENTIALS_FILE_ENV, str(present))
+    assert cli._spotify_status({"librespot": True}) == "ready"

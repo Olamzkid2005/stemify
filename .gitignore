@@ -20,6 +20,10 @@ out/
 .env
 .env.*
 !.env.example
+# Spotify cached login (worker/README.md). The data directory is already
+# ignored; these are a backstop for the client library's cwd-relative default.
+credentials.json
+spotify-credentials.json
 
 # Modal / model artifacts
 *.ckpt

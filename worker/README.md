@@ -15,6 +15,9 @@ pip install -r requirements-dev.txt
 
 # Separation engine (plan Task 9) — optional for control-plane work:
 pip install -r requirements.txt
+
+# Spotify input (optional, needs a Premium account; see "Spotify input" below):
+pip install -r requirements-spotify.txt
 ```
 
 On Windows (bash) use `source .venv/Scripts/activate` instead.
@@ -137,6 +140,52 @@ post-process, and killing only the parent used to leave that child holding the
 pipes, which blocked the single-threaded worker indefinitely. Download percent
 is reported to the job page, and a failed download prints yt-dlp's stderr to
 this console (the browser only ever sees the sanitized message).
+
+### Spotify input (optional; needs a Premium account)
+
+Spotify audio comes from the operator's own **Premium** account through the
+open-source client library, so it is opt-in, off by default, and set up once by
+hand:
+
+```bash
+# 1. Install the optional client. requirements-spotify.txt explains why this is
+#    a separate file (it needs a Premium login, and its dependency tree
+#    declares a Windows-only wheel), so it stays out of the CI install.
+#    With the pip --target fallback add --upgrade:
+#      py -3.13 -m pip install --target .runtime --upgrade -r requirements-spotify.txt
+pip install -r requirements-spotify.txt
+
+# 2. One-time interactive login. Prints the Spotify approval URL, then waits for
+#    the local callback on http://127.0.0.1:5588/login. Add --no-browser to print
+#    the URL instead of opening it. Re-running reuses the existing credentials.
+python -m worker.cli spotify-login
+
+# 3. Let the worker accept Spotify links.
+STEMIFY_SPOTIFY_ENABLED=1 python -m worker.job_loop
+```
+
+The login writes exactly one file, `data/spotify-credentials.json`, and nothing
+about it reaches the web app or the database. Keep it out of version control (it
+is gitignored); the fetch child never rewrites it, so a job can never drop a
+stray credentials file next to the source.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `STEMIFY_SPOTIFY_ENABLED` | `0` | Kill switch. Spotify input is refused until this is set. |
+| `STEMIFY_SPOTIFY_CREDENTIALS_FILE` | `$STEMIFY_DATA_DIR/spotify-credentials.json` | Cached login. The library also reads a Rust `librespot --enable-oauth` credentials file, so an existing one can be pointed at directly. |
+| `STEMIFY_SPOTIFY_CLIENT_ID` / `STEMIFY_SPOTIFY_CLIENT_SECRET` | unset | Optional free Web API app, used **only** to name a job after the track title. Without it, jobs are named from the track id. |
+| `STEMIFY_SPOTIFY_FETCH_TIMEOUT_SECONDS` | `600` | Hard per-track deadline, enforced by killing the fetch's process tree. |
+| `STEMIFY_SPOTIFY_HTTP_TIMEOUT_SECONDS` | `15` | Metadata request timeout. |
+
+`python -m worker.cli health` says which of these is missing: `unavailable`
+(client not installed), `disabled` (kill switch off), `signed out` (no
+credentials file), or `ready`.
+
+The fetch keeps Spotify's native Ogg Vorbis stream — nothing is re-encoded
+before separation — and the child process receives only the validated
+22-character track id, never the link that was pasted. The web app gets its
+Spotify tab in milestone S3 (`docs/SPOTIFY_PLAN.md`), so today this is a worker
+path only.
 
 ## Job pipeline (Task 11)
 

@@ -2,9 +2,9 @@
 
 No network and no real dependency: a minimal fake `librespot` package is
 injected into sys.modules, so the child's real logic (argument parsing, the
-stream loop, part-file handling, exit codes) is exercised without the alpha
-library installed. The one-off interactive login is a manual step and is not
-tested here.
+stream loop, part-file handling, session configuration, exit codes) is
+exercised without the alpha library installed. The operator login is covered
+separately in `tests/test_spotify.py`.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from worker import spotify_fetch
+from worker.spotify import CACHE_DIR_NAME
 from worker.spotify_fetch import (
     CREDENTIALS_ENV,
     EXIT_AUTH,
@@ -81,7 +82,29 @@ def install_fake_librespot(
     seen: dict[str, Any] = {}
     stream = _FakeStream(CHUNKS if chunks is None else chunks, stream_error)
 
+    class _ConfigurationBuilder:
+        def __init__(self) -> None:
+            self.settings: dict[str, Any] = {}
+
+        def set_store_credentials(self, value: Any) -> Any:
+            self.settings["store_credentials"] = value
+            return self
+
+        def set_stored_credential_file(self, value: Any) -> Any:
+            self.settings["stored_credentials_file"] = value
+            return self
+
+        def set_cache_dir(self, value: Any) -> Any:
+            self.settings["cache_dir"] = value
+            return self
+
+        def build(self) -> Any:
+            return SimpleNamespace(**self.settings)
+
     class _Builder:
+        def __init__(self, configuration: Any = None) -> None:
+            seen["configuration"] = configuration
+
         def stored_file(self, path: str) -> Any:
             seen["credentials"] = path
             return self
@@ -93,6 +116,7 @@ def install_fake_librespot(
 
     class _Session:
         Builder = _Builder
+        Configuration = SimpleNamespace(Builder=_ConfigurationBuilder)
 
     class _TrackId:
         @staticmethod
@@ -157,6 +181,26 @@ def test_fetch_streams_the_track_and_renames_from_part(
     ]
     first = len(CHUNKS[0])
     assert progress == [f"progress: {first}", f"progress: {first + len(CHUNKS[1])}"]
+
+
+def test_the_session_never_writes_credentials_and_stays_out_of_the_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A job must never drop a secrets file: the client library's default
+    destination is `./credentials.json` under the process cwd."""
+    seen = install_fake_librespot(monkeypatch)
+    credentials = write_credentials(tmp_path)
+    out = tmp_path / f"{TRACK_ID}.ogg"
+
+    code = spotify_fetch.main(
+        ["--track", TRACK_ID, "--out", str(out), "--credentials", str(credentials)]
+    )
+
+    assert code == EXIT_OK
+    configuration = seen["configuration"]
+    assert configuration.store_credentials is False
+    assert configuration.stored_credentials_file == str(credentials)
+    assert configuration.cache_dir == str(credentials.parent / CACHE_DIR_NAME)
 
 
 def test_credentials_come_from_the_environment_when_the_flag_is_absent(

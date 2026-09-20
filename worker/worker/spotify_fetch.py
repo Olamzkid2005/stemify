@@ -34,7 +34,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from worker.spotify import TRACK_ID
+from worker.spotify import CACHE_DIR_NAME, TRACK_ID
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -93,10 +93,23 @@ def create_session(credentials_file: Path) -> Any:
     Cached credentials produced by the librespot CLI work as-is (the library
     reads both the Python and the Rust credential formats), which is what keeps
     the one-time interactive login a separate, manual step.
+
+    Credential writing is switched **off**: a job already has credentials, and
+    the library's default destination is `./credentials.json` under the process
+    cwd, so leaving it on would drop a secrets file next to the source tree on
+    every fetch. The session cache is moved under the credentials directory for
+    the same reason (it would otherwise default to `<cwd>/cache`).
     """
     from librespot.core import Session
 
-    return Session.Builder().stored_file(str(credentials_file)).create()
+    configuration = (
+        Session.Configuration.Builder()
+        .set_store_credentials(False)
+        .set_stored_credential_file(str(credentials_file))
+        .set_cache_dir(str(credentials_file.parent / CACHE_DIR_NAME))
+        .build()
+    )
+    return Session.Builder(configuration).stored_file(str(credentials_file)).create()
 
 
 def open_stream(track_id: str, session: Any) -> Any:
