@@ -38,6 +38,16 @@
         "completed"
       ]
     },
+    "stageTiming": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "startedAt"],
+      "properties": {
+        "stage": { "$ref": "#/$defs/jobStage" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "endedAt": { "type": "string", "format": "date-time" }
+      }
+    },
     "stemKey": {
       "enum": [
         "vocals",

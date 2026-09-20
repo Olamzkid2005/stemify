@@ -109,6 +109,52 @@ def test_job_status_accepts_processing(registry) -> None:
     )
 
 
+def test_job_status_accepts_stage_timings(registry) -> None:
+    """Per-stage elapsed timing: closed spans plus the running one, which has no
+    endedAt because the worker is still inside that stage."""
+    validator = validator_for("job-status.schema.json", registry)
+    validator.validate(
+        {
+            "jobId": JOB_ID,
+            "status": "processing",
+            "stage": "separating",
+            "progress": 61,
+            "mode": "vocals_instrumental",
+            "outputFormat": "mp3",
+            "createdAt": "2026-09-06T00:00:00Z",
+            "updatedAt": "2026-09-06T00:04:05Z",
+            "stageTimings": [
+                {
+                    "stage": "starting",
+                    "startedAt": "2026-09-06T00:00:00Z",
+                    "endedAt": "2026-09-06T00:00:12Z",
+                },
+                {"stage": "separating", "startedAt": "2026-09-06T00:01:00Z"},
+            ],
+        }
+    )
+
+
+def test_job_status_rejects_unknown_stage_in_timings(registry) -> None:
+    validator = validator_for("job-status.schema.json", registry)
+    assert_invalid(
+        validator,
+        {
+            "jobId": JOB_ID,
+            "status": "processing",
+            "stage": "separating",
+            "progress": 61,
+            "mode": "vocals_instrumental",
+            "outputFormat": "mp3",
+            "createdAt": "2026-09-06T00:00:00Z",
+            "updatedAt": "2026-09-06T00:04:05Z",
+            "stageTimings": [
+                {"stage": "encoding_stems", "startedAt": "2026-09-06T00:01:00Z"},
+            ],
+        },
+    )
+
+
 def test_job_status_accepts_spotify_source(registry) -> None:
     validator = validator_for("job-status.schema.json", registry)
     validator.validate(

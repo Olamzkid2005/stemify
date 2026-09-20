@@ -42,7 +42,13 @@
     "expiresAt": { "type": "string", "format": "date-time" },
     "errorCode": { "$ref": "common.schema.json#/$defs/publicErrorCode" },
     "createdAt": { "type": "string", "format": "date-time" },
-    "updatedAt": { "type": "string", "format": "date-time" }
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "stageTimings": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/stageTiming" },
+      "minItems": 1,
+      "maxItems": 9
+    }
   },
   "allOf": [
     {
