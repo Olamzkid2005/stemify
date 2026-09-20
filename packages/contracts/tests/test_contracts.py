@@ -191,6 +191,101 @@ def test_job_status_accepts_spotify_source(registry) -> None:
     )
 
 
+def test_job_status_accepts_richer_source_metadata(registry) -> None:
+    """Album and cover are optional, and the cover URL is a local route.
+
+    The worker saves the cover into the job's results directory and this app
+    serves it, so a status response must never point the browser at Spotify's
+    CDN. Both fields are absent for uploads and whenever a lookup failed.
+    """
+    validator = validator_for("job-status.schema.json", registry)
+    validator.validate(
+        {
+            "jobId": JOB_ID,
+            "status": "processing",
+            "stage": "separating",
+            "progress": 40,
+            "userStage": "Separating stems",
+            "progressMessage": "Running the separation model",
+            "source": {
+                "type": "spotify",
+                "filename": "Olamide - Owotabua.ogg",
+                "album": "Owotabua",
+                "artworkUrl": f"/api/jobs/{JOB_ID}/artwork",
+            },
+            "mode": "vocals_instrumental",
+            "outputFormat": "mp3",
+            "workerRunning": True,
+            "createdAt": "2026-09-06T00:00:00Z",
+            "updatedAt": "2026-09-06T00:01:12Z",
+        }
+    )
+
+
+def test_job_status_rejects_a_remote_artwork_url(registry) -> None:
+    """A CDN URL would leak a third-party request out of the UI."""
+    validator = validator_for("job-status.schema.json", registry)
+    assert_invalid(
+        validator,
+        {
+            "jobId": JOB_ID,
+            "status": "processing",
+            "stage": "separating",
+            "progress": 40,
+            "mode": "vocals_instrumental",
+            "outputFormat": "mp3",
+            "source": {
+                "type": "spotify",
+                "filename": "Olamide - Owotabua.ogg",
+                "artworkUrl": "https://i.scdn.co/image/deadbeef",
+            },
+            "createdAt": "2026-09-06T00:00:00Z",
+            "updatedAt": "2026-09-06T00:01:12Z",
+        },
+    )
+
+
+def test_job_status_accepts_analysis_and_failure_text(registry) -> None:
+    """Fields the API already returns: they must not make a response invalid."""
+    validator = validator_for("job-status.schema.json", registry)
+    validator.validate(
+        {
+            "jobId": JOB_ID,
+            "status": "completed",
+            "stage": "completed",
+            "progress": 100,
+            "userStage": "Completed",
+            "mode": "full_stems",
+            "outputFormat": "mp3",
+            "source": {"type": "upload", "filename": "song.mp3"},
+            "stems": [
+                {"id": "drums", "label": "Drums", "durationSeconds": 200.0},
+            ],
+            "downloadUrl": f"/api/jobs/{JOB_ID}/downloads?kind=zip",
+            "expiresAt": "2026-09-07T00:00:00Z",
+            "analysis": {"bpm": 98.4, "key": "G# minor", "camelot": "1A"},
+            "workerRunning": True,
+            "createdAt": "2026-09-06T00:00:00Z",
+            "updatedAt": "2026-09-06T00:03:00Z",
+        }
+    )
+    validator.validate(
+        {
+            "jobId": JOB_ID,
+            "status": "failed",
+            "stage": "downloading",
+            "progress": 12,
+            "mode": "vocals_instrumental",
+            "outputFormat": "mp3",
+            "source": {"type": "spotify", "filename": None},
+            "errorCode": "DOWNLOAD_FAILED",
+            "errorMessage": "Spotify input is switched off on this machine.",
+            "createdAt": "2026-09-06T00:00:00Z",
+            "updatedAt": "2026-09-06T00:00:01Z",
+        }
+    )
+
+
 def test_job_status_accepts_completed_with_stems(registry) -> None:
     validator = validator_for("job-status.schema.json", registry)
     validator.validate(

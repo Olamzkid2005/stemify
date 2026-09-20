@@ -20,6 +20,7 @@
     "stage": { "$ref": "common.schema.json#/$defs/jobStage" },
     "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
     "progressMessage": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "userStage": { "type": "string", "minLength": 1, "maxLength": 64 },
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -30,6 +31,11 @@
           "type": ["string", "null"],
           "minLength": 1,
           "maxLength": 255
+        },
+        "album": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "artworkUrl": {
+          "type": "string",
+          "pattern": "^/api/jobs/job_[A-Za-z0-9]{16,64}/artwork$"
         }
       }
     },
@@ -45,6 +51,18 @@
     "downloadUrl": { "type": "string", "pattern": "^/api/jobs/job_[A-Za-z0-9]{16,64}/downloads" },
     "expiresAt": { "type": "string", "format": "date-time" },
     "errorCode": { "$ref": "common.schema.json#/$defs/publicErrorCode" },
+    "errorMessage": { "type": ["string", "null"], "maxLength": 500 },
+    "workerRunning": { "type": "boolean" },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bpm", "key", "camelot"],
+      "properties": {
+        "bpm": { "type": "number", "exclusiveMinimum": 0, "maximum": 400 },
+        "key": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "camelot": { "type": "string", "pattern": "^([1-9]|1[0-2])[AB]$" }
+      }
+    },
     "createdAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" },
     "stageTimings": {
