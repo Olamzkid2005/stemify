@@ -506,3 +506,100 @@ def test_weights_only_compat_survives_missing_torch(
 
     with demucs_module._weights_only_compat():
         pass  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Chunked inference with per-chunk progress (the bar used to park at one value
+# for the whole separation). These pin the pieces the replication depends on.
+# ---------------------------------------------------------------------------
+
+
+class _SubModel:
+    """HTDemucs-like: a concrete model that does carry a segment."""
+
+    def __init__(self, segment: float) -> None:
+        self.segment = segment
+
+
+class _BagModel:
+    """BagOfModels-like: samplerate/sources and sub-models, but no `segment`."""
+
+    def __init__(self, sub_segments: list[float], samplerate: int = 44100) -> None:
+        self.models = [_SubModel(value) for value in sub_segments]
+        self.samplerate = samplerate
+        self.sources = ["drums", "bass", "other", "vocals"]
+
+
+def test_chunk_offsets_match_demucs_stride() -> None:
+    """Offsets are range(0, length, int((1 - overlap) * segment_length))."""
+    # stride = int(0.75 * 400) = 300
+    assert demucs_module._chunk_offsets(1000, 400, 0.25) == [0, 300, 600, 900]
+    # stride = int(0.6 * 400) = 240
+    assert demucs_module._chunk_offsets(1000, 400, 0.4) == [0, 240, 480, 720, 960]
+    # Shorter than one chunk: a single pass over the whole signal.
+    assert demucs_module._chunk_offsets(100, 400, 0.25) == [0]
+
+
+def test_resolve_segment_seconds_prefers_the_profile_value() -> None:
+    """An explicit profile chunk_length_seconds wins over the model's own."""
+    assert demucs_module._resolve_segment_seconds(_SubModel(7.8), 5.0) == 5.0
+    assert demucs_module._resolve_segment_seconds(_BagModel([7.8]), 5.0) == 5.0
+
+
+def test_resolve_segment_seconds_uses_the_model_default() -> None:
+    assert demucs_module._resolve_segment_seconds(_SubModel(6.0), None) == 6.0
+
+
+def test_resolve_segment_seconds_reads_sub_models_for_a_bag() -> None:
+    """A bag has no `.segment`; the effective chunk length is the bag minimum.
+
+    The htdemucs checkpoint loads as a BagOfModels wrapping HTDemucs, and the
+    profiles pin chunk_length_seconds=None, so this is the production path.
+    Reading `model.segment` directly raised AttributeError and failed the job.
+    """
+    bag = _BagModel([7.8])
+    assert not hasattr(bag, "segment")
+    assert demucs_module._resolve_segment_seconds(bag, None) == 7.8
+    assert demucs_module._resolve_segment_seconds(_BagModel([6.0, 4.0]), None) == 4.0
+
+
+def test_resolve_segment_seconds_fails_loudly_when_unknown() -> None:
+    """No pinned value and no discoverable segment: typed failure, not a guess."""
+
+    class _Opaque:
+        def __init__(self) -> None:
+            self.models: list[Any] = []
+
+    with pytest.raises(SeparationError) as excinfo:
+        demucs_module._resolve_segment_seconds(_Opaque(), None)
+    assert excinfo.value.code == ErrorCode.INFERENCE_FAILED
+
+
+def test_drift_guard_accepts_the_installed_demucs() -> None:
+    """The replication must keep matching the installed demucs.
+
+    If demucs changes its chunk math, this fails loudly here instead of the
+    progress bar silently reverting to two steps (the guard then falls back to
+    apply_model by design). Skipped when the model stack is not installed.
+    """
+    pytest.importorskip("demucs.apply")
+    assert demucs_module._apply_path_matches_installed() is True
+
+
+def test_drift_guard_rejects_unknown_internals(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A demucs whose split math we do not recognize must fall back, not run."""
+    import types
+
+    def apply_model(*args: Any, **kwargs: Any) -> Any:  # unrecognized implementation
+        return None
+
+    fake_apply = types.ModuleType("demucs.apply")
+    fake_apply.apply_model = apply_model  # type: ignore[attr-defined]
+    # Replace the package too: `import demucs.apply as x` resolves through the
+    # parent package's cached attribute, so patching only the submodule key can
+    # still hand back the real module once it has been imported.
+    fake_package = types.ModuleType("demucs")
+    fake_package.apply = fake_apply  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "demucs", fake_package)
+    monkeypatch.setitem(sys.modules, "demucs.apply", fake_apply)
+    assert demucs_module._apply_path_matches_installed() is False
