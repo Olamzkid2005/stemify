@@ -12,6 +12,13 @@ import { useState } from "react";
 
 import { useJobPolling } from "@/hooks/use-job-polling";
 
+/** Source label shown under the progress ring, per input source. */
+const SOURCE_LABELS: Record<string, string> = {
+  upload: "Local upload",
+  youtube: "YouTube import",
+  spotify: "Spotify import",
+};
+
 const STAGE_ORDER = [
   { key: "starting", label: "Starting worker" },
   { key: "downloading", label: "Downloading source" },
@@ -122,7 +129,9 @@ export default function JobPage() {
   }
 
   // Active: queued or processing.
-  const stages = job.source.type === "youtube" || job.stage === "downloading"
+  // Every link source downloads before it can be validated, so the download
+  // stage is part of its list from the start; uploads skip it entirely.
+  const stages = job.source.type !== "upload" || job.stage === "downloading"
     ? STAGE_ORDER
     : STAGE_ORDER.filter((stage) => stage.key !== "downloading");
   const stageIndex = stages.findIndex((stage) => stage.key === job.stage);
@@ -156,7 +165,7 @@ export default function JobPage() {
         {job.progressMessage}
       </p>
       <p className="text-xs text-zinc-500">
-        {job.source.type === "youtube" ? "YouTube import" : "Local upload"} · {job.userStage} · {job.mode === "full_stems" ? "3 stems" : job.mode === "drum_breakdown" ? "4 drum parts" : "2 stems"}
+        {SOURCE_LABELS[job.source.type] ?? "Local upload"} · {job.userStage} · {job.mode === "full_stems" ? "3 stems" : job.mode === "drum_breakdown" ? "4 drum parts" : "2 stems"}
       </p>
 
       <div className="w-full space-y-2 text-left">

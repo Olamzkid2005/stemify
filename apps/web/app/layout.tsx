@@ -21,7 +21,7 @@ const jetbrainsMono = localFont({
 export const metadata: Metadata = {
   title: "Stemify - Extract Stems with Precision",
   description:
-    "Professional-grade audio separation. Paste a YouTube link or upload your own files to get started.",
+    "Professional-grade audio separation. Paste a YouTube link, import a Spotify track, or upload your own files to get started.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

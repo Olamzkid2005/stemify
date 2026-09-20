@@ -46,8 +46,8 @@ export default function Home() {
             Extract stems with precision.
           </h1>
           <p className="text-zinc-400 text-sm sm:text-base max-w-lg mx-auto font-normal leading-relaxed">
-            Professional-grade audio separation. Paste a YouTube link or upload
-            your own files to get started.
+            Professional-grade audio separation. Paste a YouTube link, import a
+            Spotify track, or upload your own files to get started.
           </p>
         </div>
 
