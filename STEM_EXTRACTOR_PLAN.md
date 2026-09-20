@@ -392,6 +392,9 @@ After job creation, navigate to `/jobs/{jobId}` and show:
 - Selected mode and output format.
 - Current user-facing stage.
 - Progress or an indeterminate state when exact progress is unavailable.
+- Per-stage elapsed time: each finished stage's duration, and the running stage
+  counting up, so a long separation visibly keeps moving instead of looking
+  stalled.
 - Cancel action.
 - Refresh-safe recovery.
 - A clear note that processing continues while the page is open or refreshed, as
@@ -664,9 +667,16 @@ Running response:
   "mode": "vocals_instrumental",
   "outputFormat": "mp3",
   "createdAt": "2026-09-06T00:00:00.000Z",
-  "updatedAt": "2026-09-06T00:01:12.000Z"
+  "updatedAt": "2026-09-06T00:01:12.000Z",
+  "stageTimings": [
+    { "stage": "starting", "startedAt": "2026-09-06T00:00:00.000Z", "endedAt": "2026-09-06T00:00:12.000Z" },
+    { "stage": "separating", "startedAt": "2026-09-06T00:01:00.000Z" }
+  ]
 }
 ```
+
+`stageTimings` is per-stage wall-clock timing for jobs that still show the stage
+list (absent once completed). A stage with no `endedAt` is still running.
 
 Completed response adds:
 
