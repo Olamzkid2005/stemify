@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 import { getOrCreateGuestId } from "@/lib/auth/guest";
 import { db } from "@/lib/db/client";
-import { CLIENT_LIMITS } from "@/lib/limits";
+import { serverEffectiveLimits } from "@/lib/limits";
 import { getLocalStorage } from "@/lib/storage";
 import { sanitizeFilename, sourceObjectKey } from "@/lib/storage/types";
 
@@ -22,8 +22,14 @@ export async function POST(request: Request) {
   if (!(file instanceof File) || file.size <= 0) {
     return NextResponse.json({ error: "file_required" }, { status: 400 });
   }
-  if (file.size > CLIENT_LIMITS.maxUploadBytes) {
-    return NextResponse.json({ error: "file_too_large" }, { status: 413 });
+  const limits = serverEffectiveLimits();
+  if (file.size > limits.maxUploadBytes) {
+    // The effective cap travels with the refusal: the client advertises the cap
+    // it rendered with, which can be stale across a configuration change.
+    return NextResponse.json(
+      { error: "file_too_large", limitBytes: limits.maxUploadBytes },
+      { status: 413 },
+    );
   }
 
   const filename = sanitizeFilename(file.name);

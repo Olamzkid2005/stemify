@@ -52,9 +52,75 @@ export function modeStemSummary(mode: string): string {
   return "2 stems";
 }
 
-export const CLIENT_LIMITS = {
+/**
+ * Product limits (plan Section 9).
+ *
+ * The worker is the final authority: it re-validates every source after
+ * fetching it, which is the only place a link source's duration is knowable.
+ * The values here exist so the routes and the job service refuse early with a
+ * reason instead of queueing work that is certain to fail.
+ *
+ * `DEFAULT_LIMITS` are the shipped numbers. `serverEffectiveLimits()` reads the
+ * same variables start.sh exports to both processes, so a number set in `.env`
+ * is honored on both sides instead of only inside the worker.
+ */
+export const DEFAULT_LIMITS = {
   maxUploadBytes: 100 * 1024 * 1024, // 100 MB
   maxDurationSeconds: 480, // 8 minutes
+  fullStemsMaxDurationSeconds: 360, // 6 minutes: the 3-stem split does ~1.5x the work
+} as const;
+
+export type EffectiveLimits = {
+  maxUploadBytes: number;
+  maxDurationSeconds: number;
+  fullStemsMaxDurationSeconds: number;
+};
+
+/**
+ * One positive number from the environment, or the shipped default.
+ *
+ * Blank, non-numeric, non-finite and non-positive values all fall back: the
+ * only way to change a cap is to state a usable number, so a typo cannot switch
+ * a limit off.
+ */
+function limitFromEnv(name: string, fallback: number): number {
+  // Guarded because client components import this module too, even though only
+  // server code calls into this function.
+  const env = typeof process === "undefined" ? undefined : process.env;
+  const raw = env?.[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+/** Effective caps for this server process (the routes and the job service). */
+export function serverEffectiveLimits(): EffectiveLimits {
+  return {
+    maxUploadBytes: limitFromEnv("MAX_UPLOAD_BYTES", DEFAULT_LIMITS.maxUploadBytes),
+    maxDurationSeconds: limitFromEnv("MAX_DURATION_SECONDS", DEFAULT_LIMITS.maxDurationSeconds),
+    fullStemsMaxDurationSeconds: limitFromEnv(
+      "MAX_FULL_STEMS_DURATION_SECONDS",
+      DEFAULT_LIMITS.fullStemsMaxDurationSeconds,
+    ),
+  };
+}
+
+/**
+ * Duration cap for one separation mode — mirrors
+ * `worker.input_audio.max_duration_for_mode`, so the hint a user reads before
+ * uploading is the cap the worker will enforce. Refine jobs
+ * (`drum_breakdown`) work on a worker-produced stem and take the general cap.
+ */
+export function maxDurationForMode(
+  mode: string,
+  limits: EffectiveLimits = DEFAULT_LIMITS,
+): number {
+  return mode === "full_stems" ? limits.fullStemsMaxDurationSeconds : limits.maxDurationSeconds;
+}
+
+export const CLIENT_LIMITS = {
+  maxUploadBytes: DEFAULT_LIMITS.maxUploadBytes,
+  maxDurationSeconds: DEFAULT_LIMITS.maxDurationSeconds,
   acceptedExtensions: [".mp3", ".wav", ".flac", ".ogg", ".m4a"],
   acceptedMimeHints: [
     "audio/mpeg",
@@ -72,7 +138,10 @@ export type FileValidationResult =
   | { ok: true }
   | { ok: false; reason: "invalid-type" | "too-large" };
 
-export function validateFileSelection(file: File): FileValidationResult {
+export function validateFileSelection(
+  file: File,
+  maxUploadBytes: number = CLIENT_LIMITS.maxUploadBytes,
+): FileValidationResult {
   const name = file.name.toLowerCase();
   const hasAcceptedExt = CLIENT_LIMITS.acceptedExtensions.some((ext) =>
     name.endsWith(ext),
@@ -81,9 +150,39 @@ export function validateFileSelection(file: File): FileValidationResult {
     file.type === "" || // some OSes report empty type; extension decides
     (CLIENT_LIMITS.acceptedMimeHints as readonly string[]).includes(file.type);
   if (!hasAcceptedExt || !mimeOk) return { ok: false, reason: "invalid-type" };
-  if (file.size > CLIENT_LIMITS.maxUploadBytes)
-    return { ok: false, reason: "too-large" };
+  if (file.size > maxUploadBytes) return { ok: false, reason: "too-large" };
   return { ok: true };
+}
+
+/**
+ * Message for a refused upload (plan Section 9).
+ *
+ * The route's error code decides, because the server's cap can differ from the
+ * one the page rendered with — a bare "Upload failed" would hide the one fact
+ * the user can act on. Codes are stable (`file_too_large`), not prose.
+ */
+export function uploadErrorMessage(status: number, body: unknown): string {
+  const record = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const error = typeof record.error === "string" ? record.error : "";
+  if (error === "file_too_large") {
+    return "That file is over the size limit for this machine. Choose a smaller file.";
+  }
+  if (error === "unsupported_file_type") {
+    return "That file type is not supported. Use MP3, WAV, FLAC, OGG, or M4A.";
+  }
+  if (error === "invalid_multipart" || error === "file_required") {
+    return "The upload did not arrive in one piece. Try again.";
+  }
+  if (error === "upload_failed" || status >= 500) {
+    return "The server could not store the upload. Try again.";
+  }
+  if (status === 401 || status === 403) {
+    return "This browser session cannot upload. Reload the page and try again.";
+  }
+  if (status === 429) {
+    return "Too many jobs are already running. Wait for one to finish and try again.";
+  }
+  return "Upload failed. Try again.";
 }
 
 /** Best-effort duration/codec probe via the browser's audio decoder. */

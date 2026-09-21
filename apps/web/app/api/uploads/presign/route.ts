@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { CLIENT_LIMITS } from "@/lib/limits";
+import { serverEffectiveLimits } from "@/lib/limits";
 import { getStorage } from "@/lib/storage";
 
 /**
@@ -27,8 +27,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid_request" }, { status: 400 });
   }
 
-  if (sizeBytes > CLIENT_LIMITS.maxUploadBytes) {
-    return NextResponse.json({ error: "file_too_large" }, { status: 413 });
+  const limits = serverEffectiveLimits();
+  if (sizeBytes > limits.maxUploadBytes) {
+    return NextResponse.json(
+      { error: "file_too_large", limitBytes: limits.maxUploadBytes },
+      { status: 413 },
+    );
   }
 
   // Ownership comes from the server-generated uploadId embedded in the key.
