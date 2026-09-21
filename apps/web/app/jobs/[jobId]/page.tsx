@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { useJobPolling } from "@/hooks/use-job-polling";
 import { modeStemSummary } from "@/lib/limits";
 import { formatElapsed, stageElapsedMs, type StageTiming } from "@/lib/stage-timings";
+import { zipSelection } from "@/lib/stem-selection";
 
 /** Source label shown under the progress ring, per input source. */
 const SOURCE_LABELS: Record<string, string> = {
@@ -364,10 +365,12 @@ function CompletedView({
   const hasDrumsStem = stems.some((stem) => stem.id === "drums");
 
   const allSelected = selected.size === stems.length;
-  const customZipUrl =
-    stems.length > 0 && !allSelected
-      ? `/api/jobs/${jobId}/downloads?kind=zip&stems=${Array.from(selected).join(",")}`
-      : defaultZipUrl;
+  // Unticking every stem used to leave a "Download 0 of 3 (ZIP)" link behind,
+  // which built `?stems=` and was rejected by the route as a client error. The
+  // selection decides between the worker archive, a rebuilt subset, and no
+  // download at all (lib/stem-selection.ts).
+  const zip = zipSelection(jobId, stems.map((stem) => stem.id), Array.from(selected));
+  const customZipUrl = zip.kind === "partial" ? zip.url : defaultZipUrl;
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-grow flex-col items-center gap-6 px-4 py-10 text-center">
@@ -414,13 +417,29 @@ function CompletedView({
         ) : null}
       </div>
 
-      <a
-        href={customZipUrl}
-        className="purple-gradient-btn rounded-full px-8 py-3 text-sm font-semibold text-white"
-        download
-      >
-        {allSelected ? "Download all (ZIP)" : `Download ${selected.size} of ${stems.length} (ZIP)`}
-      </a>
+      {zip.kind === "none" ? (
+        <div className="flex flex-col items-center gap-1.5">
+          {/* No link, not a broken one: an archive of nothing is not a download. */}
+          <button
+            type="button"
+            disabled
+            className="rounded-full border border-zinc-800 px-8 py-3 text-sm font-semibold text-zinc-500 disabled:cursor-not-allowed"
+          >
+            Download ZIP
+          </button>
+          <span role="status" className="text-[11px] text-amber-300/80">
+            Tick at least one stem above to build a ZIP.
+          </span>
+        </div>
+      ) : (
+        <a
+          href={customZipUrl}
+          className="purple-gradient-btn rounded-full px-8 py-3 text-sm font-semibold text-white"
+          download
+        >
+          {allSelected ? "Download all (ZIP)" : `Download ${selected.size} of ${stems.length} (ZIP)`}
+        </a>
+      )}
 
       {/* Refine drums (roadmap Phase B): split the drums stem further into
           kick/snare/cymbals/toms. Only for whole-track jobs with a drums stem,

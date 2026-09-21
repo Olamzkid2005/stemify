@@ -10,6 +10,36 @@ export type StemSelection =
   | { ok: false; reason: "missing" | "unknown" };
 
 /**
+ * What the completed-job page should offer as its ZIP download.
+ *
+ * "Every stem selected" and "no stem selected" are both states the picker can
+ * reach, and only one of them is downloadable: `?stems=` with an empty value is
+ * a client error at the route, so an empty selection must not produce a link at
+ * all. Returning the decision (rather than a URL that may be rejected) is what
+ * lets a test pin it without a browser.
+ */
+export type ZipSelection =
+  /** Every available stem is included: the worker's own archive is exactly this. */
+  | { kind: "all" }
+  /** A subset: the route rebuilds the archive from exactly these stems. */
+  | { kind: "partial"; url: string }
+  /** Nothing ticked — there is no archive to build. */
+  | { kind: "none" };
+
+export function zipSelection(
+  jobId: string,
+  availableStems: string[],
+  selectedStems: string[],
+): ZipSelection {
+  if (selectedStems.length === 0) return { kind: "none" };
+  if (selectedStems.length >= availableStems.length) return { kind: "all" };
+  return {
+    kind: "partial",
+    url: `/api/jobs/${jobId}/downloads?kind=zip&stems=${selectedStems.join(",")}`,
+  };
+}
+
+/**
  * Parse a `stems=` query value ("vocals,drums") into a deduplicated selection
  * in STEM_KEYS order. Unknown keys reject the request (no silent dropping —
  * a typo'd key must not produce a quietly wrong archive).
