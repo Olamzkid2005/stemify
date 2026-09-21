@@ -20,6 +20,7 @@ SCHEMA_FILES = (
     "common.schema.json",
     "job-request.schema.json",
     "job-status.schema.json",
+    "job-list.schema.json",
     "job-events.schema.json",
     "output-manifest.schema.json",
 )

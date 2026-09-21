@@ -359,6 +359,124 @@ def test_job_status_rejects_progress_out_of_range(registry) -> None:
     )
 
 
+# --- job-list ------------------------------------------------------------
+
+
+def _list_item(**patch) -> dict:
+    item = {
+        "jobId": JOB_ID,
+        "status": "processing",
+        "userStage": "Separating stems",
+        "progressMessage": "Running the separation model",
+        "progress": 30,
+        "mode": "vocals_instrumental",
+        "outputFormat": "mp3",
+        "source": {"type": "upload", "filename": "song.mp3"},
+        "createdAt": "2026-09-06T00:00:00Z",
+        "updatedAt": "2026-09-06T00:01:12Z",
+        "statusUrl": f"/api/jobs/{JOB_ID}",
+    }
+    item.update(patch)
+    return item
+
+
+def test_job_list_accepts_an_empty_list(registry) -> None:
+    """A browser that has never submitted anything is a normal case."""
+    validator = validator_for("job-list.schema.json", registry)
+    validator.validate({"jobs": []})
+
+
+def test_job_list_accepts_a_waiting_job_with_its_position(registry) -> None:
+    validator = validator_for("job-list.schema.json", registry)
+    validator.validate(
+        {
+            "jobs": [
+                _list_item(
+                    status="queued",
+                    progress=0,
+                    userStage="Preparing audio",
+                    progressMessage="Waiting for a worker",
+                    queuePosition=3,
+                )
+            ]
+        }
+    )
+
+
+def test_job_list_accepts_active_and_finished_together(registry) -> None:
+    """The real shape: a running job, a waiting one and a finished one."""
+    validator = validator_for("job-list.schema.json", registry)
+    validator.validate(
+        {
+            "jobs": [
+                _list_item(),
+                _list_item(status="queued", progress=0, queuePosition=1),
+                _list_item(
+                    status="completed",
+                    progress=100,
+                    userStage="Completed",
+                    source={
+                        "type": "spotify",
+                        "filename": "Olamide - Owotabua.ogg",
+                        "artworkUrl": f"/api/jobs/{JOB_ID}/artwork",
+                    },
+                ),
+            ]
+        }
+    )
+
+
+def test_job_list_rejects_a_queued_job_without_a_position(registry) -> None:
+    """"Queued — N ahead" is the point of the list; without a position it is guesswork."""
+    validator = validator_for("job-list.schema.json", registry)
+    assert_invalid(validator, {"jobs": [_list_item(status="queued", progress=0)]})
+
+
+def test_job_list_rejects_a_position_on_a_running_job(registry) -> None:
+    validator = validator_for("job-list.schema.json", registry)
+    assert_invalid(validator, {"jobs": [_list_item(queuePosition=2)]})
+
+
+def test_job_list_rejects_a_remote_artwork_url(registry) -> None:
+    validator = validator_for("job-list.schema.json", registry)
+    assert_invalid(
+        validator,
+        {
+            "jobs": [
+                _list_item(
+                    source={
+                        "type": "spotify",
+                        "filename": "Artist - Song.ogg",
+                        "artworkUrl": "https://i.scdn.co/image/deadbeef",
+                    }
+                )
+            ]
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"status": "finished"},
+        {"progress": 101},
+        {"queuePosition": 0},
+        {"userStage": ""},
+        {"statusUrl": "https://evil.example.com/api/jobs/job_a1b2c3d4e5f60718"},
+        {"source": {"type": "upload", "filename": "song.mp3", "ownerKey": "leak"}},
+        {"unknownField": True},
+    ],
+)
+def test_job_list_rejects_invalid_items(registry, patch) -> None:
+    validator = validator_for("job-list.schema.json", registry)
+    assert_invalid(validator, {"jobs": [_list_item(**patch)]})
+
+
+def test_job_list_rejects_more_than_the_cap(registry) -> None:
+    validator = validator_for("job-list.schema.json", registry)
+    assert_invalid(validator, {"jobs": [_list_item() for _ in range(11)]})
+
+
 # --- job-events ----------------------------------------------------------
 
 

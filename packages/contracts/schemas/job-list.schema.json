@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stemify.app/schemas/job-list.schema.json",
+  "title": "Job list response (GET /api/jobs)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["jobs"],
+  "properties": {
+    "jobs": {
+      "type": "array",
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/jobListItem" }
+    }
+  },
+  "$defs": {
+    "jobListItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "status",
+        "userStage",
+        "progressMessage",
+        "progress",
+        "mode",
+        "outputFormat",
+        "source",
+        "createdAt",
+        "updatedAt",
+        "statusUrl"
+      ],
+      "properties": {
+        "jobId": { "type": "string", "pattern": "^job_[A-Za-z0-9]{16,64}$" },
+        "status": { "$ref": "common.schema.json#/$defs/jobStatus" },
+        "userStage": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "progressMessage": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "mode": { "$ref": "common.schema.json#/$defs/separationMode" },
+        "outputFormat": { "$ref": "common.schema.json#/$defs/outputFormat" },
+        "queuePosition": {
+          "description": "1-based place in the global queue; queued jobs only.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "filename"],
+          "properties": {
+            "type": { "$ref": "common.schema.json#/$defs/sourceType" },
+            "filename": { "type": ["string", "null"], "minLength": 1, "maxLength": 255 },
+            "artworkUrl": {
+              "description": "Local, owner-checked route; never a third-party CDN URL.",
+              "type": "string",
+              "pattern": "^/api/jobs/job_[A-Za-z0-9]{16,64}/artwork$"
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "statusUrl": { "type": "string", "pattern": "^/api/jobs/job_[A-Za-z0-9]{16,64}$" }
+      },
+      "allOf": [
+        {
+          "description": "A waiting job must say where it is waiting; the list is the only place that position is visible.",
+          "if": { "properties": { "status": { "const": "queued" } }, "required": ["status"] },
+          "then": { "required": ["queuePosition"] }
+        },
+        {
+          "description": "Only a queued job has a position: a running one is not waiting behind anything.",
+          "if": {
+            "properties": { "status": { "not": { "const": "queued" } } },
+            "required": ["status"]
+          },
+          "then": { "properties": { "queuePosition": false } }
+        }
+      ]
+    }
+  }
+}
