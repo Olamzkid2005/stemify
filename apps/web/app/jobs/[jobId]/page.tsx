@@ -106,7 +106,7 @@ export default function JobPage() {
 
 function JobPageBody() {
   const params = useParams<{ jobId: string }>();
-  const { job, error, loading } = useJobPolling(params.jobId);
+  const { job, error, loading, cancel, cancelPending } = useJobPolling(params.jobId);
   const now = useSecondTick(job?.status === "queued" || job?.status === "processing");
 
   if (loading) {
@@ -270,17 +270,30 @@ function JobPageBody() {
         </div>
       </div>
 
-      <div
-        className="relative flex size-28 items-center justify-center rounded-full"
-        role="status"
-        aria-label={`Progress ${job.progress} percent`}
-        style={{
-          background: `conic-gradient(#9061f9 ${job.progress}%, #232329 ${job.progress}%)`,
-        }}
-      >
-        <div className="flex size-[104px] flex-col items-center justify-center rounded-full bg-[#101013]">
-          <span className="text-2xl font-extrabold text-white">{job.progress}%</span>
+      <div className="flex flex-col items-center gap-4">
+        <div
+          className="relative flex size-28 items-center justify-center rounded-full"
+          role="status"
+          aria-label={`Progress ${job.progress} percent`}
+          style={{
+            background: `conic-gradient(#9061f9 ${job.progress}%, #232329 ${job.progress}%)`,
+          }}
+        >
+          <div className="flex size-[104px] flex-col items-center justify-center rounded-full bg-[#101013]">
+            <span className="text-2xl font-extrabold text-white">{job.progress}%</span>
+          </div>
         </div>
+        {/* Stop (plan Section 9.5): queued cancels on the spot; processing sets
+            the flag the worker polls at chunk boundaries, so the visible state
+            moves within seconds. */}
+        <button
+          type="button"
+          onClick={() => void cancel()}
+          disabled={cancelPending}
+          className="rounded-full border border-red-900/60 px-6 py-2 text-xs font-semibold text-red-300 transition enabled:hover:border-red-500 enabled:hover:bg-red-950/40 enabled:hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {cancelPending ? "Stopping…" : "Stop separation"}
+        </button>
       </div>
 
       <p aria-live="polite" className="text-sm font-semibold text-zinc-100">

@@ -51,7 +51,7 @@ function detailLine(job: JobListItem): string {
   return `${stemSummary} · ${job.outputFormat.toUpperCase()}`;
 }
 
-function JobRow({ job }: { job: JobListItem }) {
+function JobRow({ job, onCancel, canceling }: { job: JobListItem; onCancel: (jobId: string) => void; canceling: boolean }) {
   const filename = job.source.filename ?? "Uploaded audio";
   const active = isActiveStatus(job.status);
   const queue = queueText(job);
@@ -74,7 +74,7 @@ function JobRow({ job }: { job: JobListItem }) {
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-zinc-200">{filename}</p>
           <p className="mt-0.5 truncate text-[11px] text-zinc-500">
-            {queue ?? detailLine(job)}
+            {canceling ? "Stopping…" : (queue ?? detailLine(job))}
           </p>
           {active ? (
             <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-zinc-800">
@@ -100,12 +100,23 @@ function JobRow({ job }: { job: JobListItem }) {
           </span>
         ) : null}
       </Link>
+      {active ? (
+        <div className="flex justify-end px-3 pb-2">
+          <button
+            type="button"
+            onClick={() => onCancel(job.jobId)}
+            className="rounded-full border border-red-900/60 px-3 py-1 text-[10px] font-semibold text-red-300 transition enabled:hover:border-red-500 enabled:hover:bg-red-950/40 enabled:hover:text-red-200"
+          >
+            {canceling ? "Stopping…" : "Stop"}
+          </button>
+        </div>
+      ) : null}
     </li>
   );
 }
 
 export function YourJobs() {
-  const { jobs, activeCount, error } = useJobs();
+  const { jobs, activeCount, error, cancelJob, cancelingJobId } = useJobs();
 
   if (jobs.length === 0) {
     // A failed refresh with nothing to show is worth saying out loud; a plain
@@ -134,7 +145,12 @@ export function YourJobs() {
       </div>
       <ul className="flex flex-col gap-2">
         {jobs.map((job) => (
-          <JobRow job={job} key={job.jobId} />
+          <JobRow
+            job={job}
+            key={job.jobId}
+            onCancel={cancelJob}
+            canceling={cancelingJobId === job.jobId}
+          />
         ))}
       </ul>
     </section>
