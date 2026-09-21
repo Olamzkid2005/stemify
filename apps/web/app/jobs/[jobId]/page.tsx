@@ -529,6 +529,13 @@ function CompletedView({
         })}
       </ul>
 
+      <Link
+        href="/"
+        className="rounded-full border border-purple-500/50 px-6 py-2 text-xs font-semibold text-purple-200 transition hover:border-purple-400 hover:text-white"
+      >
+        Separate another track
+      </Link>
+
       <p className="text-xs text-zinc-600">
         Files expire {expiresAt ? new Date(expiresAt).toLocaleString() : "soon"}.
       </p>
