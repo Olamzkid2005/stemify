@@ -10,22 +10,27 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-PASS=0
-FAIL=0
+# Results are tallied through files, not variables: several cases run inside
+# `( ... )` subshells, where an increment to $PASS / $FAIL is lost when the
+# subshell exits. The summary used to under-report those checks (25 of 31), so
+# run of the suite looked like lost coverage.
+counters="$(mktemp -d)"
+: > "$counters/pass"
+: > "$counters/fail"
 
 check() {
   local name="$1" expected="$2" actual="$3"
   if [ "$actual" = "$expected" ]; then
     echo "ok   - $name"
-    PASS=$((PASS + 1))
+    echo "pass" >> "$counters/pass"
   else
     echo "FAIL - $name (expected '$expected', got '$actual')"
-    FAIL=$((FAIL + 1))
+    echo "fail" >> "$counters/fail"
   fi
 }
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+trap 'rm -rf "$work" "$counters"' EXIT
 
 # Is this PID still alive? The "nothing was left behind" checks ask about a
 # specific process the script itself started, never about a pattern in a process
@@ -76,7 +81,10 @@ check "failed preflight does not create data dirs" "ok" "$r"
   # data-dir logic still runs for real. The web line carries a HOSTNAME=...
   # prefix, so the pattern matches the command rather than the line start.
   sed -i 's|npm run dev -w apps/web|echo DEV_SERVER_PLACEHOLDER|; s/^wait "\$WEB_PID"$//' start.sh
-  STEMIFY_SKIP_PREFLIGHT=1 timeout 20 bash start.sh >/dev/null 2>&1
+  # Skipped explicitly: this case is about the preflight and the data dirs, and
+  # the model step would otherwise reach the network (or, worse, pass only
+  # because an earlier case left a checkpoint file behind).
+  STEMIFY_SKIP_PREFLIGHT=1 STEMIFY_SKIP_MODEL_DOWNLOAD=1 timeout 20 bash start.sh >/dev/null 2>&1
 )
 for d in sources results models; do
   [ -d "$work/data/$d" ] && r=ok || r=bad
@@ -119,6 +127,83 @@ check "skip-preflight path reaches the startup banner" "${r:-bad}" "ok"
   echo "$out" | grep -q "Downloading the separation model" && r=bad || r=ok
   check "complete checkpoint is not re-downloaded" "${r:-bad}" "ok"
 )
+(
+  cd "$work"
+  cp "$OLDPWD/start.sh" start.sh
+  sed -i 's|npm run dev -w apps/web|echo DEV_SERVER_PLACEHOLDER|; s/^wait "\$WEB_PID"$//' start.sh
+  # No checkpoint at all (the first run on a new machine): the size probe must
+  # not shout before the script decides to download. Reading a missing file with
+  # a shell redirect printed "No such file or directory" whatever 2>/dev/null
+  # was attached to wc, so the run looked broken before it started.
+  rm -rf data/models
+  out="$(STEMIFY_SKIP_PREFLIGHT=1 STEMIFY_SKIP_MODEL_DOWNLOAD=0 timeout 20 bash start.sh 2>&1)"
+  # Match the checkpoint's own name: this sandbox has no worker/ directory, so
+  # an unrelated "cd: worker: No such file or directory" is expected here.
+  echo "$out" | grep -q "checkpoints/955717e8-8726e21a.th: No such file or directory" && r=bad || r=ok
+  check "a missing checkpoint is probed without a shell error" "ok" "${r:-bad}"
+)
+
+# ---------------------------------------------------------------------------
+# 3c. The model pre-download itself (plan 14.3). `curl -o` does not create the
+#     file's directory, which is several levels deep here, so a first run used
+#     to fail the download outright; and the target must be the data directory
+#     the worker actually loads from. A stub curl keeps both offline.
+# ---------------------------------------------------------------------------
+ENGINE_READY=0
+for interp in python3 python; do
+  command -v "$interp" >/dev/null 2>&1 || continue
+  "$interp" -c "import torch, demucs" >/dev/null 2>&1 && ENGINE_READY=1 && break
+done
+
+# A curl that records the -o path it was given and writes there, exactly like
+# the real one: a missing parent directory fails here too, which is the bug
+# being pinned. Keeps the case offline and independent of the real download.
+install_curl_stub() {
+  mkdir -p bin
+  cat > bin/curl <<'STUB'
+#!/usr/bin/env bash
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s' "$out" > "$STEMIFY_CURL_TARGET"
+printf 'stub' > "$out"
+STUB
+  chmod +x bin/curl
+}
+
+if [ "$ENGINE_READY" = "1" ]; then
+  (
+    cd "$work"
+    cp "$OLDPWD/start.sh" start.sh
+    sed -i 's|npm run dev -w apps/web|echo DEV_SERVER_PLACEHOLDER|; s/^wait "\$WEB_PID"$//' start.sh
+    rm -rf data bin curl-target
+    install_curl_stub
+    out="$(STEMIFY_CURL_TARGET="$PWD/curl-target" STEMIFY_SKIP_PREFLIGHT=1 STEMIFY_SKIP_MODEL_DOWNLOAD=0 PATH="$PWD/bin:$PATH" timeout 20 bash start.sh 2>&1)"
+    [ -f data/models/hub/checkpoints/955717e8-8726e21a.th ] && r=ok || r=bad
+    check "a missing checkpoint downloads into its own directory" "ok" "$r"
+    echo "$out" | grep -q "model download did not finish" && r=bad || r=ok
+    check "...and is not reported as a failed download" "ok" "$r"
+  )
+  (
+    cd "$work"
+    cp "$OLDPWD/start.sh" start.sh
+    sed -i 's|npm run dev -w apps/web|echo DEV_SERVER_PLACEHOLDER|; s/^wait "\$WEB_PID"$//' start.sh
+    custom="$work/custom-data"
+    rm -rf custom-data curl-target
+    install_curl_stub
+    out="$(STEMIFY_DATA_DIR="$custom" STEMIFY_CURL_TARGET="$PWD/curl-target" STEMIFY_SKIP_PREFLIGHT=1 STEMIFY_SKIP_MODEL_DOWNLOAD=0 PATH="$PWD/bin:$PATH" timeout 20 bash start.sh 2>&1)"
+    # The worker resolves its model under STEMIFY_DATA_DIR: a checkpoint fetched
+    # into ./data anyway would simply be downloaded a second time on first use.
+    [ -f "$custom/models/hub/checkpoints/955717e8-8726e21a.th" ] && r=ok || r=bad
+    check "the pre-download targets the configured data directory" "ok" "$r"
+  )
+else
+  echo "skip - model pre-download cases need torch and demucs installed"
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Clean tree: no process is left behind after the script exits. The child
@@ -131,7 +216,10 @@ check "skip-preflight path reaches the startup banner" "${r:-bad}" "ok"
   # A real child in place of the dev server; without a live child the check
   # below would prove nothing.
   sed -i "s|npm run dev -w apps/web|$WEB_PLACEHOLDER|; s/^wait \"\$WEB_PID\"\$//" start.sh
-  STEMIFY_SKIP_PREFLIGHT=1 timeout 6 bash start.sh >/dev/null 2>&1
+  # The model step runs before the web process starts, so leaving it on would
+  # spend this case's whole window on a real download and never start the
+  # placeholder this check is about.
+  STEMIFY_SKIP_PREFLIGHT=1 STEMIFY_SKIP_MODEL_DOWNLOAD=1 timeout 6 bash start.sh >/dev/null 2>&1
 )
 sleep 1
 web_child="$(cat "$work/web.pid" 2>/dev/null)"
@@ -273,6 +361,9 @@ check "...and says so instead of looping silently" "ok" \
   "$(grep -q 'exited immediately; not restarting it' "$work/supervision.log" && echo ok || echo bad)"
 check "...and stops trying within the window" "1" \
   "$(grep -c 'started (pid' "$work/supervision.log")"
+
+PASS=$(wc -l < "$counters/pass" | tr -d ' ')
+FAIL=$(wc -l < "$counters/fail" | tr -d ' ')
 
 echo
 echo "startup smoke: $PASS passed, $FAIL failed"

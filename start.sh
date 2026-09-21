@@ -163,8 +163,10 @@ if [ "${STEMIFY_SKIP_PREFLIGHT:-0}" != "1" ]; then
   echo "== Checks passed =="
 fi
 
-# Create the local data directories (plan Section 9.1 step 5).
-mkdir -p data/sources data/results data/models
+# Create the local data directories (plan Section 9.1 step 5). Relative to
+# STEMIFY_DATA_DIR, so a configured data directory is the one prepared.
+mkdir -p "${STEMIFY_DATA_DIR:-./data}/sources" "${STEMIFY_DATA_DIR:-./data}/results" \
+  "${STEMIFY_DATA_DIR:-./data}/models"
 
 # Ensure the separation-model checkpoint is present before any job needs it:
 # a first-run job would otherwise die at MODEL_LOAD_FAILED while torch.hub
@@ -177,12 +179,22 @@ ensure_model_checkpoint() {
   # CI/startup smoke tests set this: they run start.sh in sandboxes where a
   # real 84MB download would be wasted work or a timeout.
   [ "${STEMIFY_SKIP_MODEL_DOWNLOAD:-0}" = "1" ] && return 0
-  local checkpoint_file="data/models/hub/checkpoints/955717e8-8726e21a.th"
+  # The same layout the worker resolves: <STEMIFY_DATA_DIR>/models/hub/checkpoints
+  # (demucs sets TORCH_HOME to that models directory). A checkpoint fetched
+  # anywhere else is not the one the worker loads, so it would be downloaded
+  # again on the first job — the wait this step exists to remove.
+  local checkpoint_file="${STEMIFY_DATA_DIR:-./data}/models/hub/checkpoints/955717e8-8726e21a.th"
   local checkpoint_url="https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th"
   local expected_size=84141911
-  local actual
-  actual="$(wc -c < "$checkpoint_file" 2>/dev/null || echo 0)"
-  [ "$actual" -ge "$expected_size" ] && return 0
+  local actual=0
+  # Size-checked only when the file is there: `wc -c < missing-file` makes the
+  # shell itself print "No such file or directory" on stderr (the redirect
+  # fails before wc runs, so `2>/dev/null` on wc does not suppress it), which
+  # reads as an error on the very first run.
+  if [ -f "$checkpoint_file" ]; then
+    actual="$(wc -c < "$checkpoint_file" 2>/dev/null || echo 0)"
+    [ "$actual" -ge "$expected_size" ] && return 0
+  fi
   # Engine not installed -> nothing to pre-warm; jobs fail with the setup
   # message either way (health check already told the user what to install).
   if ! "${STEMIFY_PYTHON_BIN}" ${STEMIFY_PYTHON_ARGS} -c "import torch, demucs" >/dev/null 2>&1; then
@@ -192,6 +204,11 @@ ensure_model_checkpoint() {
     echo "NOTE: curl not found; the worker will fetch the model during the first job."
     return 0
   fi
+  # curl does not create the file's directory, and the layout above is several
+  # levels deep: without this the very first download always failed with
+  # "Failed to open the file ... No such file or directory" and the one-time
+  # pre-warm silently degraded to a download during the first job.
+  mkdir -p "$(dirname "$checkpoint_file")"
   echo "Downloading the separation model (one-time, ~84MB; resumes if interrupted)..."
   if curl -fL -C - --retry 3 --retry-delay 2 --connect-timeout 15 \
       -o "$checkpoint_file" "$checkpoint_url"; then
