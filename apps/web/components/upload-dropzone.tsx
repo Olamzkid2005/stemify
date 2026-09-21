@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CLIENT_LIMITS,
   probeAudio,
+  uploadErrorMessage,
   validateFileSelection,
   type FileValidationResult,
 } from "@/lib/limits";
@@ -26,8 +27,17 @@ function formatBytes(bytes: number): string {
 
 export function UploadDropzone({
   onUploaded,
+  maxUploadBytes = CLIENT_LIMITS.maxUploadBytes,
+  maxDurationSeconds = CLIENT_LIMITS.maxDurationSeconds,
 }: {
   onUploaded?: (result: UploadedFile) => void;
+  /**
+   * Effective caps for the page, supplied by the server (plan Section 9). The
+   * shipped defaults apply when rendered standalone, e.g. in a test.
+   */
+  maxUploadBytes?: number;
+  /** Mode-specific: the 3-stem split is capped lower than the 2-stem split. */
+  maxDurationSeconds?: number;
 }) {
   const [state, setState] = useState<UploadState>({ phase: "empty" });
   const [dragOver, setDragOver] = useState(false);
@@ -53,7 +63,16 @@ export function UploadDropzone({
       xhr.onload = () => {
         xhrRef.current = null;
         if (xhr.status < 200 || xhr.status >= 300) {
-          setState({ phase: "error", message: "Upload failed. Try again." });
+          // The route's error code decides the message: a generic "Upload
+          // failed" hid the one fact a user could act on (e.g. a file over the
+          // machine's cap).
+          let body: unknown = null;
+          try {
+            body = JSON.parse(xhr.responseText);
+          } catch {
+            body = null;
+          }
+          setState({ phase: "error", message: uploadErrorMessage(xhr.status, body) });
           return;
         }
         try {
@@ -84,13 +103,13 @@ export function UploadDropzone({
 
   const handleFile = useCallback(
     async (file: File) => {
-      const validation: FileValidationResult = validateFileSelection(file);
+      const validation: FileValidationResult = validateFileSelection(file, maxUploadBytes);
       if (!validation.ok) {
         setState({
           phase: "error",
           message:
             validation.reason === "too-large"
-              ? `That file is ${formatBytes(file.size)}. The limit is ${formatBytes(CLIENT_LIMITS.maxUploadBytes)}.`
+              ? `That file is ${formatBytes(file.size)}. The limit is ${formatBytes(maxUploadBytes)}.`
               : "That file type is not supported. Use MP3, WAV, FLAC, OGG, or M4A.",
         });
         return;
@@ -101,10 +120,10 @@ export function UploadDropzone({
         setState({ phase: "error", message: "This file does not appear to be playable audio." });
         return;
       }
-      if (probe.durationSeconds !== null && probe.durationSeconds > CLIENT_LIMITS.maxDurationSeconds) {
+      if (probe.durationSeconds !== null && probe.durationSeconds > maxDurationSeconds) {
         setState({
           phase: "error",
-          message: `That track is ${Math.round(probe.durationSeconds / 60)} minutes. The current limit is ${CLIENT_LIMITS.maxDurationSeconds / 60} minutes.`,
+          message: `That track is ${Math.round(probe.durationSeconds / 60)} minutes. The current limit is ${Math.round(maxDurationSeconds / 60)} minutes.`,
         });
         return;
       }
@@ -112,7 +131,7 @@ export function UploadDropzone({
       setState({ phase: "selected", file, durationSeconds: probe.durationSeconds });
       startUpload(file);
     },
-    [startUpload],
+    [startUpload, maxUploadBytes, maxDurationSeconds],
   );
 
   const onDrop = useCallback(
@@ -184,7 +203,8 @@ export function UploadDropzone({
               Drop an audio file here or <span className="font-semibold text-purple-300">choose a file</span>
             </p>
             <p className="text-xs text-zinc-500">
-              MP3, WAV, FLAC, OGG, M4A · up to {formatBytes(CLIENT_LIMITS.maxUploadBytes)} · max {CLIENT_LIMITS.maxDurationSeconds / 60} minutes
+              MP3, WAV, FLAC, OGG, M4A · up to {formatBytes(maxUploadBytes)} · max{" "}
+              {Math.round(maxDurationSeconds / 60)} minutes
             </p>
           </div>
         )}

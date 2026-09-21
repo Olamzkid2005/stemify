@@ -64,9 +64,11 @@ afterEach(() => {
 
 function render({
   spotifyAvailable = true,
+  youtubeAvailable = true,
   activeJobs = 0,
 }: {
   spotifyAvailable?: boolean;
+  youtubeAvailable?: boolean;
   activeJobs?: number;
 } = {}): HTMLElement {
   const container = document.createElement("div");
@@ -82,6 +84,7 @@ function render({
         activeJobs={activeJobs}
         navigate={(href) => navigated.push(href)}
         spotifyAvailable={spotifyAvailable}
+        youtubeAvailable={youtubeAvailable}
       />,
     );
   });
@@ -342,6 +345,24 @@ describe("SourcePickerForm", () => {
     // Other sources are unaffected by one source's capability.
     click(tab(container, "YouTube Link"));
     assert.ok(container.querySelector("#link-url"), "YouTube still takes a link");
+    click(tab(container, "Upload File"));
+    assert.ok(container.textContent?.includes("Drop an audio file here"));
+  });
+
+  it("says why YouTube is unavailable when the worker's switch is off", () => {
+    // Mirrors the Spotify case above: STEMIFY_YOUTUBE_ENABLED=0 makes every
+    // YouTube job fail on claim, so the form must not be offered at all.
+    const container = render({ youtubeAvailable: false });
+    click(tab(container, "YouTube Link"));
+
+    assert.equal(container.querySelector("form"), null);
+    assert.equal(container.querySelector("#link-url"), null);
+    assert.ok(container.textContent?.includes("YouTube input is switched off on this machine"));
+    assert.ok(container.textContent?.includes("STEMIFY_YOUTUBE_ENABLED"));
+
+    // The other sources keep working.
+    click(tab(container, "Spotify Link"));
+    assert.ok(container.querySelector("#link-url"), "Spotify still takes a link");
     click(tab(container, "Upload File"));
     assert.ok(container.textContent?.includes("Drop an audio file here"));
   });

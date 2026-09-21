@@ -2,7 +2,8 @@ import { JobsProvider } from "@/components/jobs-context";
 import { PoolStatus } from "@/components/pool-status";
 import { SourcePicker } from "@/components/source-picker";
 import { YourJobs } from "@/components/your-jobs";
-import { spotifyEnabled } from "@/lib/capabilities";
+import { spotifyEnabled, youtubeEnabled } from "@/lib/capabilities";
+import { serverEffectiveLimits } from "@/lib/limits";
 
 /**
  * Rendered per request: the picker reports a machine capability read from the
@@ -69,7 +70,15 @@ export default function Home() {
             many workers will pick them up, and the list shows where each one
             is, including its place in the queue. */}
         <JobsProvider>
-          <SourcePicker spotifyAvailable={spotifyEnabled()} />
+          {/* The caps are read here, in the server component, and passed down:
+              a non-public variable is not inlined into the browser bundle, so
+              the client's hints would otherwise show the shipped defaults even
+              when `.env` sets something else. */}
+          <SourcePicker
+            spotifyAvailable={spotifyEnabled()}
+            youtubeAvailable={youtubeEnabled()}
+            limits={serverEffectiveLimits()}
+          />
           <PoolStatus />
           <YourJobs />
         </JobsProvider>

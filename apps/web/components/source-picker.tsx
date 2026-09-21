@@ -5,7 +5,14 @@ import { useRouter } from "next/navigation";
 
 import { useJobs } from "@/components/jobs-context";
 import { UploadDropzone } from "@/components/upload-dropzone";
-import { OUTPUT_FORMATS, QUALITY_PRESETS, SEPARATION_MODES } from "@/lib/limits";
+import {
+  DEFAULT_LIMITS,
+  OUTPUT_FORMATS,
+  QUALITY_PRESETS,
+  SEPARATION_MODES,
+  maxDurationForMode,
+  type EffectiveLimits,
+} from "@/lib/limits";
 
 type SeparationMode = (typeof SEPARATION_MODES)[number];
 type OutputFormat = (typeof OUTPUT_FORMATS)[number];
@@ -53,6 +60,8 @@ const LINK_TABS: Record<
     unsupported: "That link is not supported. Use a standard youtube.com or youtu.be link.",
     acknowledgement:
       "I confirm I have the right to use this audio and that my use complies with YouTube's Terms of Service. Stemify processes the audio locally for personal use only.",
+    unavailable:
+      "YouTube input is switched off on this machine (STEMIFY_YOUTUBE_ENABLED=0), so a link cannot be fetched. Remove that line from .env (the worker defaults it on) and restart Stemify.",
   },
   spotify: {
     icon: "♫",
@@ -99,6 +108,9 @@ function sourceErrorMessage(code: string, tab: SourceTab): string {
     if (tab === "youtube") return LINK_TABS.youtube.unsupported;
     return "That source is not supported.";
   }
+  if (code === "youtube_unavailable") {
+    return LINK_TABS.youtube.unavailable ?? "YouTube input is not available on this machine.";
+  }
   if (code === "too_many_active_jobs") {
     // The cap allows a full worker pool plus one waiting job, so reaching it
     // means several are already going. Name the action that helps.
@@ -119,7 +131,16 @@ function sourceErrorMessage(code: string, tab: SourceTab): string {
  * this wrapper means `SourcePickerForm` can be rendered directly in a test
  * with a stub `navigate` and no router at all.
  */
-export function SourcePicker({ spotifyAvailable }: { spotifyAvailable: boolean }) {
+export function SourcePicker({
+  spotifyAvailable,
+  youtubeAvailable,
+  limits = DEFAULT_LIMITS,
+}: {
+  spotifyAvailable: boolean;
+  youtubeAvailable: boolean;
+  /** Effective caps from the server (plan Section 9); shipped defaults otherwise. */
+  limits?: EffectiveLimits;
+}) {
   const router = useRouter();
   const navigate = useCallback((href: string) => router.push(href), [router]);
   // Live count of this browser's active jobs, from the page's single poller
@@ -130,6 +151,8 @@ export function SourcePicker({ spotifyAvailable }: { spotifyAvailable: boolean }
       activeJobs={activeCount}
       navigate={navigate}
       spotifyAvailable={spotifyAvailable}
+      youtubeAvailable={youtubeAvailable}
+      limits={limits}
     />
   );
 }
@@ -137,13 +160,19 @@ export function SourcePicker({ spotifyAvailable }: { spotifyAvailable: boolean }
 export function SourcePickerForm({
   navigate,
   spotifyAvailable,
+  youtubeAvailable,
   activeJobs = 0,
+  limits = DEFAULT_LIMITS,
 }: {
   navigate: (href: string) => void;
   /** Server-provided capability; false hides the form for a source this machine cannot fetch. */
   spotifyAvailable: boolean;
+  /** Same for YouTube, which the worker defaults on (lib/capabilities.ts). */
+  youtubeAvailable: boolean;
   /** This browser's queued+processing job count; 0 when unknown. */
   activeJobs?: number;
+  /** Effective caps from the server; shipped defaults when rendered standalone. */
+  limits?: EffectiveLimits;
 }) {
   const [tab, setTab] = useState<SourceTab>("upload");
   const [separationMode, setSeparationMode] = useState<SeparationMode>("vocals_instrumental");
@@ -212,11 +241,12 @@ export function SourcePickerForm({
   );
 
   const unavailable = useCallback(
-    (source: SourceTab): string | null =>
-      source === "spotify" && !spotifyAvailable
-        ? (LINK_TABS.spotify.unavailable ?? null)
-        : null,
-    [spotifyAvailable],
+    (source: SourceTab): string | null => {
+      if (source === "youtube" && !youtubeAvailable) return LINK_TABS.youtube.unavailable ?? null;
+      if (source === "spotify" && !spotifyAvailable) return LINK_TABS.spotify.unavailable ?? null;
+      return null;
+    },
+    [spotifyAvailable, youtubeAvailable],
   );
 
   const handleLinkSubmit = useCallback(() => {
@@ -282,7 +312,13 @@ export function SourcePickerForm({
       </div>
 
       {tab === "upload" ? (
-        <UploadDropzone onUploaded={handleUploaded} />
+        // The duration cap depends on the mode, so the hint shown before an
+        // upload is the cap the worker will enforce for the mode selected now.
+        <UploadDropzone
+          onUploaded={handleUploaded}
+          maxUploadBytes={limits.maxUploadBytes}
+          maxDurationSeconds={maxDurationForMode(separationMode, limits)}
+        />
       ) : unavailable(tab) ? (
         /*
          * A form here could only produce a job the worker refuses, which is
