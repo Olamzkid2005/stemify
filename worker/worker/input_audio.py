@@ -11,6 +11,8 @@ directories are removed by the caller's context manager on every path.
 from __future__ import annotations
 
 import json
+import math
+import os
 import shutil
 import subprocess
 import tempfile
@@ -20,11 +22,62 @@ from typing import Any
 
 from worker.errors import ErrorCode
 
-# Limits mirror the plan (Section 9) and CLIENT_LIMITS in apps/web.
-MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
-MAX_DURATION_SECONDS = 480.0  # 8 minutes
+# Limits mirror the plan (Section 9), .env.example and CLIENT_LIMITS in
+# apps/web. start.sh exports the same file to both processes, so a value set
+# there is honored *here* — an unenforced cap is indistinguishable from no cap.
+# An unset or unusable value falls back to the shipped default, never to
+# "unlimited": a typo must not switch a limit off.
+DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
+DEFAULT_MAX_DURATION_SECONDS = 480.0  # 8 minutes
+# The 3-stem split is ~1.5x the work of the 2-stem split, so it carries a
+# lower ceiling (plan Section 9).
+DEFAULT_FULL_STEMS_MAX_DURATION_SECONDS = 360.0  # 6 minutes
 CANONICAL_SAMPLE_RATE = 44100
 CANONICAL_CHANNELS = 2
+
+
+def _positive_env_number(name: str, default: float) -> float:
+    """One numeric cap from the environment; anything unusable keeps `default`.
+
+    Blank, non-numeric, non-finite and non-positive values all fall back, so the
+    only way to change a cap is to state a usable number.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    if not math.isfinite(value) or value <= 0:
+        return default
+    return value
+
+
+def _limits_from_env() -> tuple[int, float, float]:
+    """(max file bytes, max duration seconds, 3-stem max duration seconds)."""
+    return (
+        int(_positive_env_number("MAX_UPLOAD_BYTES", DEFAULT_MAX_FILE_BYTES)),
+        _positive_env_number("MAX_DURATION_SECONDS", DEFAULT_MAX_DURATION_SECONDS),
+        _positive_env_number(
+            "MAX_FULL_STEMS_DURATION_SECONDS", DEFAULT_FULL_STEMS_MAX_DURATION_SECONDS
+        ),
+    )
+
+
+MAX_FILE_BYTES, MAX_DURATION_SECONDS, FULL_STEMS_MAX_DURATION_SECONDS = _limits_from_env()
+
+
+def max_duration_for_mode(mode: str) -> float:
+    """Duration cap for one job's mode (plan Section 9).
+
+    Refine jobs (`drum_breakdown`) work on a drum stem this worker produced, so
+    the input is never longer than the upload that already passed this ladder;
+    they take the general cap.
+    """
+    if mode == "full_stems":
+        return FULL_STEMS_MAX_DURATION_SECONDS
+    return MAX_DURATION_SECONDS
 
 _ALLOWED_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a"}
 
@@ -133,25 +186,41 @@ def run_ffprobe(path: Path) -> ProbeResult:
     )
 
 
-def validate_source(path: Path, max_file_bytes: int = MAX_FILE_BYTES) -> ProbeResult:
-    """Full validation ladder: extension, size, ffprobe, duration (plan §32.4)."""
+def validate_source(
+    path: Path,
+    max_file_bytes: int | None = None,
+    max_duration_seconds: float | None = None,
+) -> ProbeResult:
+    """Full validation ladder: extension, size, ffprobe, duration (plan §32.4).
+
+    Both caps default to the module limits (read from the environment at
+    import). Callers pass an explicit duration for a mode-specific ceiling
+    (`max_duration_for_mode`) and an explicit size for worker-produced stems,
+    which legitimately exceed the upload cap.
+    """
+    size_cap = MAX_FILE_BYTES if max_file_bytes is None else max_file_bytes
+    duration_cap = (
+        MAX_DURATION_SECONDS if max_duration_seconds is None else max_duration_seconds
+    )
     if path.suffix.lower() not in _ALLOWED_EXTENSIONS:
         raise InputAudioError(ErrorCode.INVALID_AUDIO, f"unsupported extension {path.suffix!r}")
 
     size = path.stat().st_size
     if size == 0:
         raise InputAudioError(ErrorCode.INVALID_AUDIO, "file is empty")
-    if size > max_file_bytes:
-        raise InputAudioError(ErrorCode.LIMIT_EXCEEDED, f"file is {size} bytes, over the limit")
+    if size > size_cap:
+        raise InputAudioError(
+            ErrorCode.LIMIT_EXCEEDED, f"file is {size} bytes, over the {size_cap} byte limit"
+        )
 
     probe = run_ffprobe(path)
 
     if probe.duration_seconds <= 0:
         raise InputAudioError(ErrorCode.INVALID_AUDIO, "non-positive duration")
-    if probe.duration_seconds > MAX_DURATION_SECONDS:
+    if probe.duration_seconds > duration_cap:
         raise InputAudioError(
             ErrorCode.LIMIT_EXCEEDED,
-            f"duration {probe.duration_seconds:.1f}s exceeds {MAX_DURATION_SECONDS:.0f}s",
+            f"duration {probe.duration_seconds:.1f}s exceeds {duration_cap:.0f}s",
         )
     if probe.channels not in (1, 2):
         raise InputAudioError(
@@ -199,7 +268,8 @@ def decode_to_canonical_wav(source: Path, dest_wav: Path) -> None:
 def prepare_source(
     source: Path,
     job_dir: Path,
-    max_file_bytes: int = MAX_FILE_BYTES,
+    max_file_bytes: int | None = None,
+    max_duration_seconds: float | None = None,
 ) -> tuple[Path, ProbeResult]:
     """Validate a source inside job_dir and decode it to canonical input.wav."""
     resolved = source.resolve()
@@ -209,7 +279,7 @@ def prepare_source(
     if not resolved.is_file():
         raise InputAudioError(ErrorCode.INVALID_AUDIO, "source file does not exist")
 
-    probe = validate_source(resolved, max_file_bytes)
+    probe = validate_source(resolved, max_file_bytes, max_duration_seconds)
     dest = job_dir / "input.wav"
     decode_to_canonical_wav(resolved, dest)
     return dest, probe
