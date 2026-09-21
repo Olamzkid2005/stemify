@@ -52,6 +52,9 @@ export class LocalDatabase {
     if (!names.has("source_album")) {
       this.run("ALTER TABLE jobs ADD COLUMN source_album TEXT");
     }
+    if (!names.has("stem_selection")) {
+      this.run("ALTER TABLE jobs ADD COLUMN stem_selection TEXT");
+    }
   }
 
   /**
@@ -64,9 +67,9 @@ export class LocalDatabase {
       .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'")
       .get() as { sql?: string } | undefined;
     if (!row?.sql) return;
-    // Both CHECKs live on this one table, so one rebuild covers either gap.
+    // All three CHECKs live on this one table, so one rebuild covers any gap.
     // The quoted token cannot match a comment.
-    if (row.sql.includes("drum_breakdown") && row.sql.includes("'spotify'")) return;
+    if (row.sql.includes("drum_breakdown") && row.sql.includes("'spotify'") && row.sql.includes("'custom'")) return;
     // Project exactly the columns the old table has: naming them keeps a
     // rebuild triggered by one constraint from dropping the values of a column
     // an earlier migration added (jobs.quality must survive this rebuild).

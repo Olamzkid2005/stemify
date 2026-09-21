@@ -192,6 +192,27 @@ describe("jobs-mode migration (roadmap Phase B)", () => {
     }
   });
 
+  it("rebuilt table accepts custom mode with a stem selection", () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "stemify-migration-"));
+    makeLegacyDb(dataDir);
+
+    const db = new LocalDatabase(dataDir);
+    try {
+      db.run(
+        `INSERT INTO jobs (id, owner_key, source_type, mode, output_format, status, stem_selection)
+         VALUES ('job_custom', 'owner', 'upload', 'custom', 'mp3', 'queued', ?)`,
+        '["vocals","drums"]',
+      );
+      const row = db.get<{ mode: string; stem_selection: string | null }>(
+        "SELECT mode, stem_selection FROM jobs WHERE id = 'job_custom'",
+      );
+      assert.equal(row?.mode, "custom");
+      assert.equal(row?.stem_selection, '["vocals","drums"]');
+    } finally {
+      db.close();
+    }
+  });
+
   it("a fresh database is created on the current schema with no rebuild", () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), "stemify-migration-"));
     const db = new LocalDatabase(dataDir);

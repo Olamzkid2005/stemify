@@ -8,8 +8,14 @@
 
 export type JobStatus = "queued" | "processing" | "completed" | "failed" | "canceled" | "expired";
 export type SourceType = "upload" | "youtube" | "spotify";
-export type SeparationMode = "vocals_instrumental" | "full_stems" | "drum_breakdown";
+export type SeparationMode = "vocals_instrumental" | "full_stems" | "drum_breakdown" | "custom";
 export type OutputFormat = "mp3" | "wav" | "flac" | "ogg" | "m4a";
+
+/**
+ * Tickable stems for mode='custom' (docs/STEM_SELECTION_PLAN.md). Mirrors the
+ * contracts stemSelection def and the worker's STEM_SELECTION_KEYS.
+ */
+export type StemSelectionKey = "vocals" | "drums" | "bass" | "instrumental";
 
 export type QualityPreset = "fast" | "balanced";
 
@@ -31,6 +37,8 @@ export type JobRow = {
   output_format: OutputFormat;
   /** Per-job quality preset; null = worker default (STEMIFY_QUALITY). */
   quality: QualityPreset | null;
+  /** JSON array for mode='custom'; null for every other mode. */
+  stem_selection: string | null;
   status: JobStatus;
   stage: string | null;
   progress: number;
@@ -92,7 +100,11 @@ CREATE TABLE IF NOT EXISTS jobs (
   source_duration_seconds REAL,
   source_size_bytes INTEGER,
   source_sha256 TEXT,
-  mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems', 'drum_breakdown')),
+  mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems', 'drum_breakdown', 'custom')),
+  -- Stem list for mode='custom' (docs/STEM_SELECTION_PLAN.md): a JSON array of
+  -- 1-4 keys from vocals/drums/bass/instrumental, validated app-side. NULL for
+  -- every other mode. Mirrors worker/worker/database.py JOBS_TABLE_DDL.
+  stem_selection TEXT,
   output_format TEXT NOT NULL CHECK (output_format IN ('mp3', 'wav', 'flac', 'ogg', 'm4a')),
   quality TEXT,
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'canceled', 'expired')),
