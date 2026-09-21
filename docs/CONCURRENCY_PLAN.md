@@ -1,8 +1,42 @@
 # Parallel Job Processing — Design Plan
 
-Status: **PLANNED** (nothing built). Today Stemify accepts one active job per
-browser and the worker processes exactly one job at a time. This plan makes
-several jobs run at once, one worker process each.
+Status: **BUILT** (C1–C5). Stemify now accepts several jobs per browser and runs
+enough worker processes to work more than one at a time. Measured cost and the
+shipped pool size: `docs/BENCHMARKS.md`; operating instructions:
+`worker/README.md`, "The worker pool".
+
+What the milestones landed as, and the two places this document was refined by
+the implementation:
+
+- **C1** `workers` table + `register_worker`/`unregister_worker`, ownership-based
+  `recover_stale_processing_jobs` (a 30 s staleness window), and the same
+  recovery on every heartbeat tick. `write_heartbeat` also refreshes the worker's
+  own row, so a queue used outside `run()` self-registers instead of leaving a
+  NULL owner.
+- **C2** `start.sh` starts `STEMIFY_WORKER_CONCURRENCY` processes, tracks their
+  PIDs in an array, kills every slot on exit, and respawns a slot only if it had
+  been alive for 5 s. `STEMIFY_WORKER_THREADS` is exported as `cores / pool` (an
+  explicit `OMP_NUM_THREADS` still wins) and applied at `worker.job_loop` import,
+  before anything imports torch. `update_progress` is best-effort; every other
+  write stays strict.
+- **C3** `MAX_ACTIVE_JOBS` defaults to 3 (pool 2 + 1 waiting job) and the
+  refine-drums route shares that bound instead of keeping its own `>= 1`.
+- **C4** `GET /api/jobs` + `job-list.schema.json`, queue positions derived from
+  the claim's own `ORDER BY created_at, id`, a home-page list that reuses
+  `getJobView`, and a warn-but-accept line under the picker fed by one shared
+  poller.
+- **C5** `python -m worker.pool_benchmark --pool N --jobs M` measures the pool the
+  way `start.sh` runs it (N processes, one queue, a split thread budget); the
+  numbers and the shipped default are in `docs/BENCHMARKS.md`.
+
+Refinements worth knowing about:
+
+1. **Queue position counts waiting jobs only** (this document's formula), so the
+   front of the queue reads "next in line" even while another job is running —
+   it is the next *claim*, not the next to start.
+2. **`.env` may pin `MAX_ACTIVE_JOBS`.** The default was raised, but an existing
+   `MAX_ACTIVE_JOBS=1` in a local `.env` still caps one browser at one job. The
+   pool does not read that variable; only the API does.
 
 Decisions already made with the operator:
 
@@ -110,9 +144,13 @@ CREATE TABLE IF NOT EXISTS workers (
 ### 3.4 Thread budget per worker
 
 The launcher exports `STEMIFY_WORKER_THREADS=max(1, cores // pool)` and the
-worker calls `torch.set_num_threads(...)` (plus `OMP_NUM_THREADS` before torch
-loads). This is what separates "two jobs each ~2× slower" from "two jobs each
-4× slower".
+worker applies it to `OMP_NUM_THREADS` / `MKL_NUM_THREADS` /
+`OPENBLAS_NUM_THREADS` / `NUMEXPR_NUM_THREADS` at *import* of `worker.job_loop`
+(`_apply_thread_budget`). Those are read by the numeric stack when it loads, and
+`worker.job_loop` imports no torch, so the first model import already sees the
+budget — no `torch.set_num_threads()` call is needed, and an explicit value of
+any of those four variables still wins. This is what separates "two jobs each
+~2× slower" from "two jobs each 4× slower".
 
 ### 3.5 Memory
 
@@ -152,11 +190,11 @@ error.
 
 | # | Deliverable | Tests |
 |---|---|---|
-| C1 | **prerequisite** ownership-based recovery + per-worker liveness + periodic recovery | extend `tests/test_lifecycle.py`: live peer's job untouched, stale owner's job failed, legacy `NULL` owner still failed |
-| C2 | the pool: `STEMIFY_WORKER_CONCURRENCY`, thread budget, `start.sh` pool + slot-PID cleanup + guarded respawn, best-effort progress writes | thread-budget resolution unit test; pool start and Ctrl+C killing every slot are manual smoke checks (no `start.sh` test exists today) |
+| C1 | **prerequisite** ownership-based recovery + per-worker liveness + periodic recovery | done in `tests/test_queue.py` (live peer's job untouched, stale owner's job failed, legacy `NULL` owner still failed, best-effort progress) and `tests/test_heartbeat.py` (per-worker rows, the tick's recovery, `run()` registering and releasing) — not `test_lifecycle.py`, which skips without ffmpeg |
+| C2 | the pool: `STEMIFY_WORKER_CONCURRENCY`, thread budget, `start.sh` pool + slot-PID cleanup + guarded respawn, best-effort progress writes | `tests/test_thread_budget.py`, and three new `tests/test_startup_smoke.sh` cases that start a real 3-slot pool and assert every slot dies on exit (the old cases' `sed` never matched the dev-server line, so they proved nothing — fixed) |
 | C3 | web capacity: `MAX_ACTIVE_JOBS` raised to pool + headroom, refine-drums shares the bound, 429 kept as backstop | extend `lib/jobs-limit.test.ts` |
 | C4 | `GET /api/jobs` + `job-list.schema.json` + queue position + home-page list + warn-but-accept copy | contract test for the list; web test for the queue-position ordering and the warning in the existing picker render test |
-| C5 | measure pool 1 vs 2 with `worker.benchmark`, record in `docs/BENCHMARKS.md`, set the shipped default from the number, README sizing/RAM/CUDA guidance | none (measurement + docs) |
+| C5 | measure pool 1 vs 2, record in `docs/BENCHMARKS.md`, set the shipped default from the number, README sizing/RAM/CUDA guidance | `tests/test_pool_benchmark.py` (the tool scores throughput, so it needs its own tests); the numbers themselves are in `docs/BENCHMARKS.md` |
 
 C1 changes no behaviour at pool size 1; the existing orphan-recovery tests must
 keep passing unchanged, which is the point of doing it first.
@@ -188,7 +226,7 @@ keep passing unchanged, which is the point of doing it first.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `STEMIFY_WORKER_CONCURRENCY` | 2 (pending C5) | 1 disables parallelism entirely |
-| `MAX_ACTIVE_JOBS` | 3 (pending C3) | per browser; the API's backstop stays |
+| `STEMIFY_WORKER_CONCURRENCY` | 2 (C5: 618 s vs 706 s for 4 jobs) | 1 disables parallelism entirely |
+| `MAX_ACTIVE_JOBS` | 3 (C3: pool + one queued) | per browser; the API's backstop stays |
 | `STEMIFY_WORKER_THREADS` | `max(1, cores // pool)` | exported by the launcher, applied by the worker |
 | `STEMIFY_WORKER_POLL_MS` | 500 | unchanged — idle claim polls are one indexed `SELECT` and not worth tuning |

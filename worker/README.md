@@ -156,6 +156,54 @@ jobs that pass validation stop with `MODEL_LOAD_FAILED`.
 Warm model reuse: the worker keeps the loaded model in memory across jobs, so
 only the first job in a worker run pays model-load cost.
 
+### The worker pool (more than one job at a time)
+
+`start.sh` runs **`STEMIFY_WORKER_CONCURRENCY` worker processes** (default 2),
+one job each, against the same queue. Running the loop by hand above still gives
+exactly one worker; the pool is the launcher's job. Claims are atomic
+(`BEGIN IMMEDIATE` plus a conditional `UPDATE`), so N processes need no extra
+locking and never both take the same job.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `STEMIFY_WORKER_CONCURRENCY` | `2` | Worker processes `start.sh` starts. `1` restores strict one-at-a-time processing. |
+| `STEMIFY_WORKER_THREADS` | `cores / pool` (min 1) | Threads each worker may use. Exported by `start.sh` before starting the pool; an explicit `OMP_NUM_THREADS` (or `MKL`/`OPENBLAS`/`NUMEXPR`) still wins. |
+
+**Budget before you raise it.** Every worker loads and holds its own model, so
+**plan for `pool x~1 GB` of RAM** (measured peak RSS per worker is 0.9-1.0 GB and
+plateaus with track length, because the model dominates - see
+`docs/BENCHMARKS.md`). A pool of 2 on a 4 GB machine is already tight.
+
+**Cores, not just RAM.** `start.sh` splits the machine's cores across the pool,
+so two workers on a 4-thread laptop get 2 threads each rather than fighting over
+four. That is the difference between "two jobs each somewhat slower" and "two
+jobs each much slower". Only hand-set it from a measurement (the benchmark
+below takes `--threads`), never by feel.
+
+**CUDA.** On a GPU box, keep the pool at 1 unless VRAM is generous: two
+processes sharing one GPU can exhaust it, and the second job then fails with
+`GPU_OUT_OF_MEMORY`. Nothing in the pool code is GPU-aware - the pool is a CPU
+parallelism feature.
+
+**Ownership, not startup, decides what gets recovered.** A worker registers
+itself in the `workers` table and refreshes that row on the same 5 s tick that
+writes `worker_heartbeat`. Startup recovery (and every heartbeat tick) fails a
+`processing` job **only** when its owner is gone or its row is older than the
+30 s staleness window - so a worker starting up never kills the job a peer is
+running, and a worker that crashes is cleaned up within 30 s instead of at the
+next restart. A clean shutdown deletes its own row. With a pool of 1 this is
+behaviourally identical to the old "everything processing at startup is dead"
+rule.
+
+Measured cost and the shipped default: see `docs/BENCHMARKS.md`.
+
+```bash
+# One run per pool size, same machine, same fixtures. The number to compare is
+# total wall time for the whole set, plus the per-job time it cost.
+PYTHONPATH="$PWD/.runtime" python -m worker.pool_benchmark --pool 1 --jobs 4 --duration 20
+PYTHONPATH="$PWD/.runtime" python -m worker.pool_benchmark --pool 2 --jobs 4 --duration 20
+```
+
 ### YouTube downloads
 
 yt-dlp runs from a fixed argument array (no shell) in its own process group
