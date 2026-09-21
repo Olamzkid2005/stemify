@@ -38,6 +38,54 @@ Peak RSS plateaus around 0.9–1.0 GB regardless of fixture length because the
 model, not the audio buffer, dominates memory. Python-level peak allocations
 stay under 90 MB.
 
+### Worker pool: 1 process vs 2 (concurrency plan C5)
+
+Same machine, same fixtures, same pipeline (`vocals_instrumental`, mp3), four
+20 s jobs queued up front and left to drain. Pool 1 is today's sequential
+behaviour; pool 2 is the shipped default, splitting the box's 4 cores into 2
+threads per worker.
+
+| Configuration | Wall time, 4 jobs | Per-job time (median) | Concurrent starts | Workers used |
+|---|---|---|---|---|
+| `--pool 1` (4 threads each) | **706 s** | 175.7 s | 0 | 1 |
+| `--pool 2` (2 threads each) | **618 s** | 312.1 s | 3 | 2 |
+
+Reading it honestly:
+
+- **Throughput: +12.5%.** 88 s saved on four jobs. Real, but not the point — on a
+  4-thread CPU there is not much to win; the win needs more cores.
+- **Latency: each job is 1.8x slower** (176 s → 312 s). This is the trade the
+  pool makes, and it is why pooling threads inside one process would be worse:
+  one inference already saturates all four cores, so the split is what keeps
+  "two jobs each slower" from becoming "two jobs each four times slower".
+- **Both jobs actually move at once.** Three of the four jobs started while
+  another was still running (read from the jobs table, not assumed from the pool
+  size), so two browser tabs show two moving progress bars instead of one waiting
+  behind the other. That is the product change; the throughput number is a bonus.
+- **`STEMIFY_WORKER_CONCURRENCY=1` still exists** and restores the left column
+  exactly — one job at a time, fastest per-job latency. It remains the right
+  setting on a CUDA box (two processes sharing one GPU can exhaust VRAM).
+- **Shipped default stays 2**, because the measured total is better *and* the
+  concurrency is the feature. On this hardware a 4th job finishes sooner than it
+  would have, even though every individual job takes longer.
+
+Memory: each worker holds its own model, so the pool's footprint is
+`pool x~1 GB` (measured peak RSS per worker 0.9-1.0 GB, flat in track length).
+Two workers on a 4 GB machine is already tight; see `worker/README.md`.
+
+Note the per-job times here are the **whole job** (validate, decode, separate,
+analyze, encode, package, ZIP) and so are larger than the separation-only rows
+above; the analysis pass (BPM/key) and packaging are a real share of a short
+fixture. They are the number a person actually waits for.
+
+Reproduce (from `worker/`; throws away its own data directory and copies the
+checkpoint so it never touches the app's queue):
+
+```bash
+PYTHONPATH="$PWD/.runtime" python -m worker.pool_benchmark --pool 1 --jobs 4 --duration 20 --out /tmp/pool-1.json
+PYTHONPATH="$PWD/.runtime" python -m worker.pool_benchmark --pool 2 --jobs 4 --duration 20 --out /tmp/pool-2.json
+```
+
 ### Encoding (20 s fixture, per format)
 
 | Format | Encode time | Output size |
