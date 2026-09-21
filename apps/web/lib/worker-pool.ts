@@ -8,6 +8,8 @@
  * liveness concept, and nothing here can disagree with the worker's own
  * recovery rule about which rows are alive.
  */
+import { freemem } from "node:os";
+
 import { db } from "@/lib/db/client";
 import { WORKER_STALE_MS } from "@/lib/worker-status";
 
@@ -36,6 +38,15 @@ export type WorkerPoolStatus = {
   ramPerWorkerMb: number;
   /** Guidance for the configured pool, not just the part that is up. */
   ramTotalMb: number;
+  /**
+   * Free memory on this machine at this poll, or null when the platform would
+   * not report it. A pool that does not fit in it will swap, so this is the one
+   * number that can turn the guidance above into a warning.
+   *
+   * Read as the worker's memory: the worker runs on the same machine as this
+   * app (start.sh starts both), so there is no second host to ask.
+   */
+  freeRamMb: number | null;
 };
 
 function positiveInt(value: string | undefined): number | null {
@@ -44,7 +55,31 @@ function positiveInt(value: string | undefined): number | null {
   return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : null;
 }
 
-export function workerPoolStatus(now = Date.now()): WorkerPoolStatus {
+/**
+ * Free memory in whole MB, or null when the platform will not say.
+ *
+ * Windows and macOS report *available* memory — free plus reclaimable cache —
+ * which is what a new worker can actually be given. Linux reports MemFree
+ * alone, so there the figure is conservative and the warning can fire before
+ * the machine is genuinely short. That direction is deliberate: a spurious
+ * "low memory" costs one glance, a missed one costs a swap-thrashed
+ * separation. Injected into `workerPoolStatus` so tests pin the comparison
+ * rather than the host's current load.
+ */
+export function systemFreeRamMb(): number | null {
+  try {
+    const bytes = freemem();
+    return Number.isFinite(bytes) && bytes >= 0 ? Math.floor(bytes / (1024 * 1024)) : null;
+  } catch {
+    // A capacity hint is never worth failing the job list it rides on.
+    return null;
+  }
+}
+
+export function workerPoolStatus(
+  now = Date.now(),
+  freeRam = systemFreeRamMb(),
+): WorkerPoolStatus {
   // Same staleness window the job view uses for "worker unavailable", so the
   // two signals on one page can never contradict each other.
   const row = db.get<{ n: number }>(
@@ -58,5 +93,6 @@ export function workerPoolStatus(now = Date.now()): WorkerPoolStatus {
     threadsPerWorker: positiveInt(process.env.STEMIFY_WORKER_THREADS),
     ramPerWorkerMb: RAM_PER_WORKER_MB,
     ramTotalMb: configured * RAM_PER_WORKER_MB,
+    freeRamMb: freeRam,
   };
 }

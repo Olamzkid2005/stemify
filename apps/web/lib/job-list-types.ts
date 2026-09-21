@@ -45,6 +45,12 @@ export type WorkerPoolInfo = {
   threadsPerWorker: number | null;
   ramPerWorkerMb: number;
   ramTotalMb: number;
+  /**
+   * Free memory on the worker's machine at this poll; null when it could not be
+   * read. Null is not "plenty": an unknown value suppresses the low-memory
+   * warning rather than being treated as either answer.
+   */
+  freeRamMb: number | null;
 };
 
 export type JobListResponse = { jobs: JobListItem[]; pool: WorkerPoolInfo };
@@ -56,12 +62,15 @@ export function isPoolInfo(value: unknown): value is WorkerPoolInfo {
     const raw = pool[key];
     return typeof raw === "number" && Number.isFinite(raw) && raw >= 0;
   };
+  /** Nullable counts: absent is invalid, null is an honest "unknown". */
+  const optionalCount = (key: string): boolean => pool[key] === null || count(key);
   return (
     count("configured") &&
     count("running") &&
     count("ramPerWorkerMb") &&
     count("ramTotalMb") &&
-    (pool.threadsPerWorker === null || count("threadsPerWorker"))
+    optionalCount("threadsPerWorker") &&
+    optionalCount("freeRamMb")
   );
 }
 
