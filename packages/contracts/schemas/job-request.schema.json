@@ -48,8 +48,19 @@
       ]
     },
     "mode": { "$ref": "common.schema.json#/$defs/separationMode" },
+    "stemSelection": { "$ref": "common.schema.json#/$defs/stemSelection" },
     "outputFormat": { "$ref": "common.schema.json#/$defs/outputFormat" },
     "quality": { "$ref": "common.schema.json#/$defs/qualityPreset" },
     "idempotencyKey": { "type": "string", "minLength": 16, "maxLength": 128 }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "mode": { "const": "custom" } } },
+      "then": { "required": ["stemSelection"] }
+    },
+    {
+      "if": { "properties": { "mode": { "enum": ["vocals_instrumental", "full_stems", "drum_breakdown"] } } },
+      "then": { "not": { "required": ["stemSelection"] } }
+    }
+  ]
 }

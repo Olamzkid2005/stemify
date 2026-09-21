@@ -5,6 +5,7 @@ venv/
 __pycache__/
 *.pyc
 .venv*/
+.runtime/
 
 # Local runtime data
 data/

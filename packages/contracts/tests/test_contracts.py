@@ -89,6 +89,70 @@ def test_job_request_rejects_invalid_variants(registry, patch) -> None:
     assert_invalid(validator, {**base, **patch})
 
 
+def test_job_request_accepts_custom_mode_with_selection(registry) -> None:
+    validator = validator_for("job-request.schema.json", registry)
+    validator.validate(
+        {
+            "source": {"type": "upload", "uploadId": UPLOAD_ID, "objectKey": OBJECT_KEY, "filename": "song.mp3"},
+            "mode": "custom",
+            "stemSelection": ["vocals", "drums"],
+            "outputFormat": "mp3",
+            "idempotencyKey": "0123456789abcdef",
+        }
+    )
+    # Instrumental alone is the rest-of-mix request.
+    validator.validate(
+        {
+            "source": {"type": "youtube", "url": "https://youtu.be/abc123"},
+            "mode": "custom",
+            "stemSelection": ["instrumental"],
+            "outputFormat": "mp3",
+            "idempotencyKey": "0123456789abcdef",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        # custom without a selection is meaningless.
+        {"stemSelection": ""},
+        {"stemSelection": []},
+        # Unknown stems (guitar/piano were dropped; drum parts come from refine).
+        {"stemSelection": ["vocals", "piano"]},
+        # Duplicates carry no meaning.
+        {"stemSelection": ["drums", "drums"]},
+    ],
+)
+def test_job_request_rejects_bad_selections(registry, patch) -> None:
+    validator = validator_for("job-request.schema.json", registry)
+    base = {
+        "source": {"type": "youtube", "url": "https://youtu.be/abc123"},
+        "mode": "custom",
+        "stemSelection": ["vocals"],
+        "outputFormat": "mp3",
+        "idempotencyKey": "0123456789abcdef",
+    }
+    assert_invalid(validator, {**base, **patch})
+
+
+@pytest.mark.parametrize("mode", ["vocals_instrumental", "full_stems", "drum_breakdown"])
+def test_job_request_rejects_selection_on_fixed_modes(registry, mode) -> None:
+    """stemSelection is the custom mode's input; on the fixed modes it would
+    silently disagree with what the mode computes, so it is forbidden."""
+    validator = validator_for("job-request.schema.json", registry)
+    assert_invalid(
+        validator,
+        {
+            "source": {"type": "youtube", "url": "https://youtu.be/abc123"},
+            "mode": mode,
+            "stemSelection": ["vocals"],
+            "outputFormat": "mp3",
+            "idempotencyKey": "0123456789abcdef",
+        },
+    )
+
+
 # --- job-status ----------------------------------------------------------
 
 

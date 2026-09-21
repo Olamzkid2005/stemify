@@ -7,7 +7,14 @@
       "enum": ["upload", "youtube", "spotify"]
     },
     "separationMode": {
-      "enum": ["vocals_instrumental", "full_stems", "drum_breakdown"]
+      "enum": ["vocals_instrumental", "full_stems", "drum_breakdown", "custom"]
+    },
+    "stemSelection": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": { "enum": ["vocals", "drums", "bass", "instrumental"] }
     },
     "outputFormat": {
       "enum": ["mp3", "wav", "flac", "ogg", "m4a"]
