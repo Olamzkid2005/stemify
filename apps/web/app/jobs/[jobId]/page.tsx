@@ -5,6 +5,11 @@
  * URL, failure states with retry, and the completed stem list. Stage text
  * changes are announced via aria-live; layout reserves space to avoid shift.
  * Completed jobs (roadmap A3): tick stems to include in a custom ZIP.
+ *
+ * A slim header (same brand block as the home page) sits above every state —
+ * loading, not-found, failed, active, completed — so the way home never
+depends
+ * on how the job ended.
  */
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -47,7 +52,58 @@ function useSecondTick(enabled: boolean): number {
   return now;
 }
 
+/**
+ * The header every job state shares. The brand block mirrors the home page's
+ * markup (same soundwave mark, same type) but is a link, so it doubles as the
+ * persistent way home from any state below.
+ */
+function JobHeader() {
+  return (
+    <header className="z-20 flex w-full items-center justify-between px-6 py-5 md:px-10">
+      <Link
+        href="/"
+        aria-label="Stemify home"
+        className="flex items-center gap-2.5 transition-opacity hover:opacity-80"
+      >
+        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-tr from-violet-600 to-fuchsia-500 shadow-lg shadow-purple-900/30">
+          <svg
+            className="h-4 w-4 text-white"
+            fill="none"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2.5}
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path d="M4 10v4" />
+            <path d="M8 7v10" />
+            <path d="M12 4v16" />
+            <path d="M16 8v8" />
+            <path d="M20 11v2" />
+          </svg>
+        </div>
+        <span className="text-base font-extrabold uppercase tracking-wider text-white">
+          Stemify
+        </span>
+      </Link>
+      <span className="cursor-default rounded-md border border-zinc-800 bg-zinc-900/80 px-3 py-1 font-mono text-[11px] font-semibold tracking-wider text-zinc-400 transition-colors hover:border-zinc-700">
+        V2.4.0 ENGINE
+      </span>
+    </header>
+  );
+}
+
 export default function JobPage() {
+  return (
+    <>
+      <JobHeader />
+      <JobPageBody />
+    </>
+  );
+}
+
+function JobPageBody() {
   const params = useParams<{ jobId: string }>();
   const { job, error, loading } = useJobPolling(params.jobId);
   const now = useSecondTick(job?.status === "queued" || job?.status === "processing");
