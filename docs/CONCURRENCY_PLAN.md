@@ -24,7 +24,10 @@ the implementation:
 - **C4** `GET /api/jobs` + `job-list.schema.json`, queue positions derived from
   the claim's own `ORDER BY created_at, id`, a home-page list that reuses
   `getJobView`, and a warn-but-accept line under the picker fed by one shared
-  poller.
+  poller. The same response carries the pool block the strip renders: live
+  worker count, the pool's RAM need, and this machine's free memory, so an
+  oversized pool is visible before a job is submitted rather than after it
+  starts swapping.
 - **C5** `python -m worker.pool_benchmark --pool N --jobs M` measures the pool the
   way `start.sh` runs it (N processes, one queue, a split thread budget); the
   numbers and the shipped default are in `docs/BENCHMARKS.md`.
@@ -200,7 +203,7 @@ error.
 | C1 | **prerequisite** ownership-based recovery + per-worker liveness + periodic recovery | done in `tests/test_queue.py` (live peer's job untouched, stale owner's job failed, legacy `NULL` owner still failed, best-effort progress) and `tests/test_heartbeat.py` (per-worker rows, the tick's recovery, `run()` registering and releasing) — not `test_lifecycle.py`, which skips without ffmpeg |
 | C2 | the pool: `STEMIFY_WORKER_CONCURRENCY`, thread budget, `start.sh` pool + slot-PID cleanup + guarded respawn, best-effort progress writes | `tests/test_thread_budget.py`, and three new `tests/test_startup_smoke.sh` cases that start a real 3-slot pool and assert every slot dies on exit (the old cases' `sed` never matched the dev-server line, so they proved nothing — fixed) |
 | C3 | web capacity: `MAX_ACTIVE_JOBS` raised to pool + headroom, refine-drums shares the bound, 429 kept as backstop | extend `lib/jobs-limit.test.ts` |
-| C4 | `GET /api/jobs` + `job-list.schema.json` + queue position + home-page list + warn-but-accept copy | contract test for the list; web test for the queue-position ordering and the warning in the existing picker render test |
+| C4 | `GET /api/jobs` + `job-list.schema.json` + queue position + home-page list + warn-but-accept copy + the pool/RAM strip (free memory included) | contract test for the list and the pool block; web tests for the queue-position ordering, the picker warning, and each strip state (ready / short pool / none / low memory / unknown memory) |
 | C5 | measure pool 1 vs 2, record in `docs/BENCHMARKS.md`, set the shipped default from the number, README sizing/RAM/CUDA guidance | `tests/test_pool_benchmark.py` (the tool scores throughput, so it needs its own tests); the numbers themselves are in `docs/BENCHMARKS.md` |
 
 C1 changes no behaviour at pool size 1; the existing orphan-recovery tests must

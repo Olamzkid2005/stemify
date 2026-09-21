@@ -174,6 +174,12 @@ locking and never both take the same job.
 plateaus with track length, because the model dominates - see
 `docs/BENCHMARKS.md`). A pool of 2 on a 4 GB machine is already tight.
 
+**It warns before you hit it.** The home page prints the pool's need beside this
+machine's free memory and flags the shortfall, so a pool bigger than the box
+announces itself up front instead of being discovered as swap-thrash mid-job.
+Free memory is re-read on every poll; when the platform will not report it, the
+warning is withheld rather than guessed.
+
 **Cores, not just RAM.** `start.sh` splits the machine's cores across the pool,
 so two workers on a 4-thread laptop get 2 threads each rather than fighting over
 four. That is the difference between "two jobs each somewhat slower" and "two
