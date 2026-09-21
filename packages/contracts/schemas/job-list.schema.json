@@ -23,7 +23,8 @@
         "running",
         "threadsPerWorker",
         "ramPerWorkerMb",
-        "ramTotalMb"
+        "ramTotalMb",
+        "freeRamMb"
       ],
       "properties": {
         "configured": {
@@ -51,6 +52,11 @@
           "description": "Guidance for the configured pool: configured x ramPerWorkerMb.",
           "type": "integer",
           "minimum": 1
+        },
+        "freeRamMb": {
+          "description": "Free memory on the machine running the worker, at this poll; null when the platform would not report it. Below ramTotalMb the home page warns that the pool will not fit, so null must be a distinct third state, never a stand-in for plenty.",
+          "type": ["integer", "null"],
+          "minimum": 0
         }
       }
     },

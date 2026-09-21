@@ -388,6 +388,7 @@ def _pool(**patch) -> dict:
         "threadsPerWorker": 2,
         "ramPerWorkerMb": 1024,
         "ramTotalMb": 2048,
+        "freeRamMb": 8192,
     }
     pool.update(patch)
     return pool
@@ -494,6 +495,20 @@ def test_job_list_rejects_more_than_the_cap(registry) -> None:
     assert_invalid(validator, _list_body([_list_item() for _ in range(11)]))
 
 
+def test_job_list_accepts_a_pool_whose_free_memory_could_not_be_read(registry) -> None:
+    """A platform that will not report memory says so, instead of reporting zero."""
+    validator = validator_for("job-list.schema.json", registry)
+    validator.validate(_list_body(pool=_pool(freeRamMb=None)))
+
+
+def test_job_list_rejects_a_pool_without_free_memory(registry) -> None:
+    """Required and nullable: omitting the field is not the same as "unknown"."""
+    validator = validator_for("job-list.schema.json", registry)
+    pool = _pool()
+    del pool["freeRamMb"]
+    assert_invalid(validator, _list_body(pool=pool))
+
+
 def test_job_list_rejects_a_missing_pool(registry) -> None:
     """The home page reads the pool off this response; a list without it is broken."""
     validator = validator_for("job-list.schema.json", registry)
@@ -521,6 +536,10 @@ def test_job_list_accepts_a_pool_with_no_worker_running(registry) -> None:
         {"configured": "2"},
         {"ramPerWorkerMb": 0},
         {"ramTotalMb": -1},
+        # Negative free memory is nonsense, and "enough RAM" is not the schema's
+        # call to make: the consumer compares it against ramTotalMb.
+        {"freeRamMb": -1},
+        {"freeRamMb": "8192"},
         # Worker internals stay on the server: the strip needs counts, not pids.
         {"pid": 4242},
     ],
