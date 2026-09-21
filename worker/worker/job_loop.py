@@ -39,6 +39,57 @@ from worker.youtube import download_audio, resolve_title
 
 DEFAULT_POLL_MS = 500
 
+# Thread-limiting environment variables the numeric libraries read at import
+# time (OpenMP, MKL, OpenBLAS, numexpr).
+_THREAD_ENV_VARS = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
+
+
+def _thread_budget() -> int | None:
+    """Threads this worker may use, from `STEMIFY_WORKER_THREADS` (plan 3.4).
+
+    Returns None for unset/blank/non-numeric/less-than-one, meaning "no budget
+    was set, leave the library defaults alone" — a bad value must never be
+    treated as a request to run single-threaded.
+    """
+    raw = os.environ.get("STEMIFY_WORKER_THREADS")
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value >= 1 else None
+
+
+def _apply_thread_budget() -> int | None:
+    """Cap this worker's CPU threads before the numeric stack is imported.
+
+    The launcher splits the machine's cores across the pool, so N workers
+    share the box instead of each grabbing every core (concurrency plan 3.4).
+    OpenMP and friends read their limits at import, which is why this is
+    called at module import, above every pipeline import — report a bug here
+    if a separation ever runs wider than the budget.
+
+    An explicit OMP_NUM_THREADS (or MKL/OpenBLAS/numexpr) still wins: the
+    operator may know the machine better than the arithmetic does.
+    """
+    budget = _thread_budget()
+    if budget is None:
+        return None
+    for variable in _THREAD_ENV_VARS:
+        os.environ.setdefault(variable, str(budget))
+    return budget
+
+
+# Applied at import: `python -m worker.job_loop` is the worker entry point and
+# nothing it imports loads torch, so this precedes the model's first import.
+_apply_thread_budget()
+
 
 def _poll_seconds() -> float:
     raw = os.environ.get("STEMIFY_WORKER_POLL_MS")
@@ -414,10 +465,16 @@ def _heartbeat_loop(queue: JobQueue, stop: threading.Event) -> None:
     Runs on a daemon thread so the heartbeat keeps ticking while a long
     separation blocks the main loop; the web UI reads this row to show its
     non-sensitive worker-unavailable state.
+
+    The same tick recovers peers that have died (concurrency plan 3.3), so a
+    crashed worker's job is failed within the staleness window instead of
+    waiting for the next restart. It is idempotent and ownership-aware, so
+    every worker running it is harmless.
     """
     while not stop.is_set():
         try:
             queue.write_heartbeat()
+            queue.recover_stale_processing_jobs()
         except Exception:  # noqa: BLE001,S110 - heartbeat must never kill the worker; retried next tick
             pass
         stop.wait(HEARTBEAT_INTERVAL_MS / 1000)
@@ -425,6 +482,10 @@ def _heartbeat_loop(queue: JobQueue, stop: threading.Event) -> None:
 
 def run(stop_after_iterations: int | None = None) -> None:
     queue = JobQueue()
+    # Register before recovering: a job this process owns is not stale, and
+    # publishing liveness first means a peer running recovery concurrently
+    # cannot mistake this worker for a dead one (concurrency plan 3.3).
+    queue.register_worker()
     queue.recover_stale_processing_jobs()
     queue.write_heartbeat()
     poll_seconds = _poll_seconds()
@@ -447,6 +508,9 @@ def run(stop_after_iterations: int | None = None) -> None:
     finally:
         stop.set()
         heartbeat.join(timeout=HEARTBEAT_INTERVAL_MS / 1000)
+        # Clean shutdown removes this worker's row, so a restart does not have
+        # to wait out the staleness window before its own jobs are recoverable.
+        queue.unregister_worker()
         queue.close()
 
 

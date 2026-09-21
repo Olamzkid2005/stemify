@@ -159,4 +159,15 @@ CREATE TABLE IF NOT EXISTS worker_heartbeat (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   updated_at INTEGER NOT NULL
 );
+
+-- One row per live worker process (see worker/worker/database.py). The web app
+-- does not read this table: it exists here so both clients agree on the schema
+-- and a database created by either side is complete. worker_heartbeat stays
+-- the signal the UI uses for "is any worker up".
+CREATE TABLE IF NOT EXISTS workers (
+  worker_call_id TEXT PRIMARY KEY,
+  pid INTEGER,
+  started_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;

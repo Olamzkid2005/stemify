@@ -111,6 +111,18 @@ CREATE TABLE IF NOT EXISTS worker_heartbeat (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   updated_at INTEGER NOT NULL
 );
+
+-- One row per live worker process (concurrency plan 3.3). `worker_heartbeat`
+-- stays the single "is any worker up" signal the UI reads; this table answers
+-- the different question recovery needs: which worker owns a processing job,
+-- and is that worker still alive? Without it, a second worker starting up
+-- would fail the job the first one is in the middle of.
+CREATE TABLE IF NOT EXISTS workers (
+  worker_call_id TEXT PRIMARY KEY,
+  pid INTEGER,
+  started_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 """
 
 
@@ -129,6 +141,12 @@ class ClaimedJob:
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+# How long a worker's row may go without a heartbeat before recovery treats it
+# as dead (concurrency plan 3.3): 30s is six 5s heartbeat periods, long enough
+# that a stalled disk write cannot orphan the job of a worker that is running.
+WORKER_STALE_MS = 30_000
 
 
 def _retention_ms() -> int:
@@ -156,6 +174,8 @@ class JobQueue:
         self.data_dir = directory
         self.database_path = directory / "stemify.sqlite3"
         self.worker_call_id = uuid.uuid4().hex
+        self._worker_pid = os.getpid()
+        self._worker_started_at = _now_ms()
         # isolation_level=None: explicit transactions only, autocommit otherwise.
         # check_same_thread=False: the connection may be created before the loop
         # thread starts; each instance is still used by one thread at a time.
@@ -302,16 +322,26 @@ class JobQueue:
         progress: int,
         detail: str | None = None,
     ) -> bool:
-        """Persist current stage/progress and a safe user-facing detail."""
+        """Persist current stage/progress and a safe user-facing detail.
+
+        Best-effort by contract (concurrency plan 2.4): progress is cosmetic, so
+        with several workers writing the same file a `SQLITE_BUSY` on a progress
+        row must never fail the job it is reporting on. Job state transitions
+        (claim, fail, complete) stay strict — only this one is swallowed.
+        """
         bounded = max(0, min(100, int(progress)))
-        cursor = self._connection.execute(
-            "UPDATE jobs SET stage = ?, progress = ?, updated_at = ? "
-            "WHERE id = ? AND status = 'processing'",
-            (stage.value, bounded, _now_ms(), job_id),
-        )
-        if cursor.rowcount == 1 and detail:
+        try:
+            cursor = self._connection.execute(
+                "UPDATE jobs SET stage = ?, progress = ?, updated_at = ? "
+                "WHERE id = ? AND status = 'processing'",
+                (stage.value, bounded, _now_ms(), job_id),
+            )
+            updated = cursor.rowcount == 1
+        except Exception:  # noqa: BLE001 - cosmetic; the next update retries
+            return False
+        if updated and detail:
             self.record_event(job_id, "progress", detail, stage=stage, progress=bounded)
-        return cursor.rowcount == 1
+        return updated
 
     def record_source_filename(self, job_id: str, filename: str) -> None:
         """Store a resolved display name for the source (roadmap A2).
@@ -470,12 +500,54 @@ class JobQueue:
 
         The web app compares updated_at against its own clock to show a
         non-sensitive worker-unavailable state when the worker is not running.
+
+        The same tick refreshes this worker's own `workers` row (concurrency
+        plan 3.3): one statement per concern, so a heartbeat can never advance
+        liveness without also proving *which* worker is alive — the cheap
+        INSERT form keeps a lone heartbeat (a queue used outside `run()`)
+        self-registering rather than leaving a NULL owner behind.
         """
+        now = _now_ms()
         self._connection.execute(
             "INSERT INTO worker_heartbeat (id, updated_at) VALUES (1, ?) "
             "ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at",
-            (_now_ms(),),
+            (now,),
         )
+        self._connection.execute(
+            "INSERT INTO workers (worker_call_id, pid, started_at, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(worker_call_id) DO UPDATE SET updated_at = excluded.updated_at",
+            (self.worker_call_id, self._worker_pid, self._worker_started_at, now),
+        )
+
+    def register_worker(self) -> None:
+        """Publish this process as a live worker before it claims anything.
+
+        `started_at`/`pid` make a stuck worker identifiable in the local
+        database; recovery only reads `updated_at`. Idempotent, so a restart
+        that reuses the id cannot fail on an existing row.
+        """
+        now = _now_ms()
+        self._connection.execute(
+            "INSERT INTO workers (worker_call_id, pid, started_at, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(worker_call_id) DO UPDATE SET "
+            "pid = excluded.pid, updated_at = excluded.updated_at",
+            (self.worker_call_id, self._worker_pid, self._worker_started_at, now),
+        )
+
+    def unregister_worker(self) -> None:
+        """Drop this worker's row on clean shutdown (concurrency plan 3.3).
+
+        Best-effort: a failed delete is not a reason to refuse to exit, and
+        recovery expires a stale row on its own within the staleness window.
+        """
+        try:
+            self._connection.execute(
+                "DELETE FROM workers WHERE worker_call_id = ?", (self.worker_call_id,)
+            )
+        except Exception:  # noqa: BLE001, S110 - shutdown must not be blocked by bookkeeping
+            pass
 
     def heartbeat_age_ms(self) -> int | None:
         """Milliseconds since the last heartbeat, or None if never written."""
@@ -485,22 +557,44 @@ class JobQueue:
         return None if row is None else max(0, _now_ms() - row[0])
 
     def recover_stale_processing_jobs(self) -> int:
-        """Fail jobs left in processing by a previous run (plan Section 13.2).
+        """Fail jobs whose owning worker is gone (concurrency plan 3.3).
 
-        The local milestone runs one worker per data directory, so any row still
-        processing at startup belongs to a dead process.
+        Ownership, not startup, decides: a `processing` row is orphaned only
+        when it has no owner at all (a legacy row from before
+        `worker_call_id` was recorded) or its owner has no live row in
+        `workers` — so a second worker starting up never fails the job a live
+        peer is in the middle of. Idempotent, so running it from every
+        worker's heartbeat tick is harmless.
         """
         now = _now_ms()
+        cutoff = now - WORKER_STALE_MS
         cursor = self._connection.execute(
             "UPDATE jobs SET status = 'failed', error_code = ?, "
             "error_message_public = ?, diagnostic_reference = ?, completed_at = ?, updated_at = ? "
-            "WHERE status = 'processing'",
+            "WHERE status = 'processing' AND (worker_call_id IS NULL OR worker_call_id NOT IN "
+            "(SELECT worker_call_id FROM workers WHERE updated_at >= ?))",
             (
                 ErrorCode.UNKNOWN.value,
                 "Processing was interrupted when the worker restarted. Try again.",
                 _diagnostic_reference(),
                 now,
                 now,
+                cutoff,
             ),
         )
-        return cursor.rowcount
+        returned = cursor.rowcount
+        self._prune_stale_workers(cutoff)
+        return returned
+
+    def _prune_stale_workers(self, cutoff: int) -> None:
+        """Drop worker rows past the staleness window.
+
+        The jobs UPDATE above already ran, so a pruned owner's processing job
+        has been failed by now — deleting the row cannot hide it. Bookkeeping
+        only, therefore best-effort: a locked database must not turn recovery
+        into a startup failure.
+        """
+        try:
+            self._connection.execute("DELETE FROM workers WHERE updated_at < ?", (cutoff,))
+        except Exception:  # noqa: BLE001, S110 - hygiene, retried next tick
+            pass
