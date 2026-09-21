@@ -152,7 +152,13 @@ run_pool_case() {
   (
     cd "$work"
     cp "$OLDPWD/start.sh" start.sh
-    sed -i 's|npm run dev -w apps/web|echo DEV_SERVER_PLACEHOLDER|; s/^wait "\$WEB_PID"$//' start.sh
+    # The dev-server stub also reports the pool size the web process would
+    # inherit: the home page's pool summary reads this variable, so what it is
+    # told must be what actually runs.
+    sed -i \
+      -e 's|npm run dev -w apps/web|echo DEV_SERVER_PLACEHOLDER; echo "WEB SEES POOL=$STEMIFY_WORKER_CONCURRENCY"|' \
+      -e 's/^wait "\$WEB_PID"$//' \
+      start.sh
     env "$@" STEMIFY_SKIP_PREFLIGHT=1 STEMIFY_SKIP_MODEL_DOWNLOAD=1 \
       timeout 20 bash start.sh > pool.log 2>&1
   )
@@ -162,16 +168,22 @@ run_pool_case STEMIFY_WORKER_CONCURRENCY=3 STEMIFY_WORKER_THREADS=2
 check "pool size and thread split are reported" \
   "Worker pool: 3 process(es), 2 thread(s) each" \
   "$(grep -m1 '^Worker pool:' "$work/pool.log")"
+check "the web app is told the pool size that runs" "WEB SEES POOL=3" \
+  "$(grep -m1 '^WEB SEES POOL=' "$work/pool.log")"
 
 run_pool_case STEMIFY_WORKER_CONCURRENCY=abc
 check "a non-numeric pool size falls back to one worker" "ok" \
   "$(grep -q '^Worker pool: 1 process(es)' "$work/pool.log" && echo ok || echo bad)"
 check "a non-numeric pool size says why" "ok" \
   "$(grep -q "is not a number" "$work/pool.log" && echo ok || echo bad)"
+check "the web app is told the normalized pool size" "WEB SEES POOL=1" \
+  "$(grep -m1 '^WEB SEES POOL=' "$work/pool.log")"
 
 run_pool_case STEMIFY_WORKER_CONCURRENCY=0
 check "a zero pool size falls back to one worker" "ok" \
   "$(grep -q '^Worker pool: 1 process(es)' "$work/pool.log" && echo ok || echo bad)"
+check "a zero pool size does not reach the web app as zero" "WEB SEES POOL=1" \
+  "$(grep -m1 '^WEB SEES POOL=' "$work/pool.log")"
 
 # ---------------------------------------------------------------------------
 # 6. The pool really starts one process per slot, and Ctrl+C (here: the

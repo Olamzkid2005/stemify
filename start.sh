@@ -107,6 +107,11 @@ case "$POOL" in
     POOL=1
     ;;
 esac
+# Export the value that was actually used, not the text that was given: the web
+# app reads this same variable for the home page's pool summary, so a normalized
+# pool size must be what it reports ("1 of 2 workers running" because of a typo
+# in .env would be a lie about a pool of one).
+export STEMIFY_WORKER_CONCURRENCY="$POOL"
 
 # Split the machine's cores across the pool (plan 3.4): N workers each using
 # every core is worse than N workers sharing them, because one inference
