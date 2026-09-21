@@ -221,6 +221,44 @@ def test_source_type_rebuild_preserves_quality_and_foreign_keys(tmp_path: Path) 
         queue.close()
 
 
+def test_rebuilt_table_accepts_custom_mode_with_selection(tmp_path: Path) -> None:
+    """The stem-selection rebuild: a legacy DB must accept mode='custom' plus
+    the stem_selection column, and the claim must carry the decoded list."""
+    _make_legacy_db(tmp_path)
+    queue = JobQueue(data_dir=str(tmp_path))
+    try:
+        queue._connection.execute(
+            "INSERT INTO jobs (id, owner_key, source_type, mode, output_format, status, stem_selection)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("job_custom", "owner", "upload", "custom", "mp3", "queued", '["vocals","drums"]'),
+        )
+        claimed = queue.claim_next_queued_job()
+        assert claimed is not None
+        assert claimed.mode == "custom"
+        assert claimed.stem_selection == ("vocals", "drums")
+    finally:
+        queue.close()
+
+
+def test_claim_parses_junk_selection_as_none(tmp_path: Path) -> None:
+    """The column was written by another process: junk reads as None (the job
+    then fails validation with a clear code), never a JSON error at claim."""
+    _make_legacy_db(tmp_path)
+    queue = JobQueue(data_dir=str(tmp_path))
+    try:
+        queue._connection.execute(
+            "INSERT INTO jobs (id, owner_key, source_type, mode, output_format, status, stem_selection)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("job_junk", "owner", "upload", "custom", "mp3", "queued", "not json"),
+        )
+        claimed = queue.claim_next_queued_job()
+        assert claimed is not None
+        assert claimed.mode == "custom"
+        assert claimed.stem_selection is None
+    finally:
+        queue.close()
+
+
 def test_fresh_database_needs_no_rebuild(tmp_path: Path) -> None:
     """A brand-new database is created with the current schema, no rebuild."""
     queue = JobQueue(data_dir=str(tmp_path))

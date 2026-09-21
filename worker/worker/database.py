@@ -9,6 +9,7 @@ guarded so no terminal state ever moves backward.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import shutil
 import sqlite3
@@ -43,12 +44,16 @@ CREATE TABLE IF NOT EXISTS jobs (
   source_duration_seconds REAL,
   source_size_bytes INTEGER,
   source_sha256 TEXT,
-  mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems', 'drum_breakdown')),
+  mode TEXT NOT NULL CHECK (mode IN ('vocals_instrumental', 'full_stems', 'drum_breakdown', 'custom')),
   output_format TEXT NOT NULL CHECK (output_format IN ('mp3', 'wav', 'flac', 'ogg', 'm4a')),
   -- Per-job quality preset (STEMIFY_QUALITY values); NULL = worker default.
   -- Nullable TEXT on purpose: validation is app-side, so a future preset
   -- never needs another table rebuild (SQLite cannot alter CHECKs).
   quality TEXT,
+  -- Stem list for mode='custom' (docs/STEM_SELECTION_PLAN.md): a JSON array of
+  -- 1-4 keys from vocals/drums/bass/instrumental, validated app-side and
+  -- re-validated at claim. NULL for every other mode.
+  stem_selection TEXT,
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'canceled', 'expired')),
   stage TEXT,
   progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
@@ -136,6 +141,7 @@ class ClaimedJob:
     mode: str = "vocals_instrumental"
     output_format: str = "mp3"
     quality: str | None = None
+    stem_selection: tuple[str, ...] | None = None
     source_filename: str | None = None
     expires_at: int | None = None
     source_url: str | None = None
@@ -143,6 +149,36 @@ class ClaimedJob:
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+# mode='custom' carries this exact allowlist (docs/STEM_SELECTION_PLAN.md).
+STEM_SELECTION_KEYS = ("vocals", "drums", "bass", "instrumental")
+
+
+def parse_stem_selection(raw: str | None) -> tuple[str, ...] | None:
+    """Decode the jobs.stem_selection JSON column, or None when absent.
+
+    Claim-time re-validation, not trust: the column was written by another
+    process (the web app), so a malformed or unknown value reads as None —
+    the job then fails validation in job_loop with a clear code instead of a
+    JSON error deep in the pipeline. A selection on a non-custom mode is
+    ignored the same way: the mode decides.
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(value, list) or not value:
+        return None
+    if not all(isinstance(item, str) for item in value):
+        return None
+    if len(set(value)) != len(value):
+        return None
+    if not set(value) <= set(STEM_SELECTION_KEYS):
+        return None
+    return tuple(value)
 
 
 # How long a worker's row may go without a heartbeat before recovery treats it
@@ -216,7 +252,7 @@ class JobQueue:
         table_sql = row[0] or ""
         # Both CHECKs live on this one table, so one rebuild covers either gap.
         # The quoted token cannot match a comment.
-        if "drum_breakdown" in table_sql and "'spotify'" in table_sql:
+        if "drum_breakdown" in table_sql and "'spotify'" in table_sql and "'custom'" in table_sql:
             return
         # Project exactly the columns the old table has. Naming them
         # explicitly is what stops a rebuild triggered by one constraint from
@@ -275,6 +311,8 @@ class JobQueue:
             self._connection.execute("ALTER TABLE jobs ADD COLUMN quality TEXT")
         if "source_album" not in columns:
             self._connection.execute("ALTER TABLE jobs ADD COLUMN source_album TEXT")
+        if "stem_selection" not in columns:
+            self._connection.execute("ALTER TABLE jobs ADD COLUMN stem_selection TEXT")
 
     def claim_next_queued_job(self) -> ClaimedJob | None:
         """Atomically move the oldest queued job to processing (plan Section 11.2)."""
@@ -284,7 +322,7 @@ class JobQueue:
             cursor.execute("BEGIN IMMEDIATE")
             row = cursor.execute(
                 "SELECT id, source_type, source_object_key, mode, output_format, "
-                "source_filename, expires_at, source_url, quality FROM jobs "
+                "source_filename, expires_at, source_url, quality, stem_selection FROM jobs "
                 "WHERE status = 'queued' ORDER BY created_at, id LIMIT 1"
             ).fetchone()
             if row is None:
@@ -310,6 +348,7 @@ class JobQueue:
                 expires_at=row[6],
                 source_url=row[7],
                 quality=row[8],
+                stem_selection=parse_stem_selection(row[9]),
             )
         except BaseException:
             # Only unwind a transaction that actually opened: when BEGIN IMMEDIATE
