@@ -16,6 +16,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { useJobPolling } from "@/hooks/use-job-polling";
+import { StemPlayer } from "@/components/stem-player";
 import { modeStemSummary } from "@/lib/limits";
 import { formatElapsed, stageElapsedMs, type StageTiming } from "@/lib/stage-timings";
 import { zipSelection } from "@/lib/stem-selection";
@@ -573,13 +574,7 @@ function CompletedView({
                   Download
                 </a>
               </div>
-              <audio
-                controls
-                preload="none"
-                src={`/api/jobs/${jobId}/downloads?kind=stem&stem=${stem.id}`}
-                className="mt-3 h-10 w-full"
-                aria-label={`Preview ${stem.label}`}
-              />
+              <StemPlayer jobId={jobId} stem={stem} className="mt-3" />
             </li>
           );
         })}
