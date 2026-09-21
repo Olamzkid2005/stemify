@@ -12,7 +12,7 @@ import "./test-env";
 import { db, closeDatabase } from "@/lib/db/client";
 import { FakeStorage } from "@/lib/storage/fake";
 import { __setStorageForTests } from "@/lib/storage";
-import { createJob, idempotencyHash } from "@/lib/jobs";
+import { createJob, idempotencyHash, requestCancel } from "@/lib/jobs";
 
 // These tests exercise idempotency/ownership, not the Task 13 active-job limit;
 // lift the limit so multiple jobs for one owner don't trip 429s here.
@@ -85,6 +85,56 @@ describe("createJob", () => {
     );
     assert.equal(customRow?.mode, "custom");
     assert.equal(customRow?.stem_selection, '["vocals","drums","instrumental"]');
+  });
+
+  it("cancels a queued job on the spot and flags a processing one", async () => {
+    const queued = await createJob({
+      ownerKey: OWNER,
+      body: { ...structuredClone(validBody), idempotencyKey: "client-key-cancel-q000001" },
+    });
+    assert.equal(queued.ok, true);
+    const queuedId = (queued as { ok: true; job: { id: string } }).job.id;
+
+    const result = requestCancel(queuedId, OWNER);
+    assert.deepEqual(result, { ok: true, outcome: "canceled" });
+    const row = db.get<{ status: string }>("SELECT status FROM jobs WHERE id = ?", queuedId);
+    assert.equal(row?.status, "canceled");
+
+    // Processing: the flag is what the worker polls; the worker writes the
+    // final state itself at the next chunk boundary.
+    const processingId = "job_cancelproc00000000000000000001";
+    db.run(
+      `INSERT INTO jobs (id, owner_key, source_type, mode, output_format, status)
+       VALUES (?, ?, 'upload', 'vocals_instrumental', 'mp3', 'processing')`,
+      processingId,
+      OWNER,
+    );
+    const flagged = requestCancel(processingId, OWNER);
+    assert.deepEqual(flagged, { ok: true, outcome: "stop_requested" });
+    const flaggedRow = db.get<{ status: string; cancel_requested: number }>(
+      "SELECT status, cancel_requested FROM jobs WHERE id = ?",
+      processingId,
+    );
+    assert.equal(flaggedRow?.status, "processing");
+    assert.equal(flaggedRow?.cancel_requested, 1);
+  });
+
+  it("refuses cancels for foreign jobs and finished jobs", async () => {
+    const foreign = requestCancel("job_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", OWNER);
+    assert.deepEqual(foreign, { ok: false, status: 404, error: "not_found" });
+
+    const doneId = "job_canceldone0000000000000000001";
+    db.run(
+      `INSERT INTO jobs (id, owner_key, source_type, mode, output_format, status)
+       VALUES (?, ?, 'upload', 'vocals_instrumental', 'mp3', 'completed')`,
+      doneId,
+      OWNER,
+    );
+    const finished = requestCancel(doneId, OWNER);
+    assert.deepEqual(finished, { ok: false, status: 409, error: "not_active" });
+    // Ownership: a cancel is scoped to the caller's own rows, same as status.
+    const other = requestCancel(doneId, "gid_nottheowner00000000001");
+    assert.deepEqual(other, { ok: false, status: 404, error: "not_found" });
   });
 
   it("refuses junk selections instead of building the wrong archive", async () => {

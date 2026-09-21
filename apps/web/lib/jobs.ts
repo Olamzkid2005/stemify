@@ -227,6 +227,50 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
   };
 }
 
+export type CancelResult =
+  | { ok: true; outcome: "canceled" | "stop_requested" }
+  | { ok: false; status: 404 | 409; error: "not_found" | "not_active" };
+
+/**
+ * The stop button (plan Section 9.5). A queued job is canceled on the spot —
+ * it never started. A processing job gets `cancel_requested` set, which the
+ * worker polls at every model chunk boundary, so separation stops within a
+ * few seconds on this machine's chunk sizes and the final state is written by
+ * the worker itself (never completed after a cancel). Ownership is checked in
+ * the same query, so another browser's job is 404 — identical to the status
+ * route's answer for it.
+ */
+export function requestCancel(jobId: string, ownerKey: string): CancelResult {
+  const job = db.get<Pick<JobRow, "id" | "status">>(
+    "SELECT id, status FROM jobs WHERE id = ? AND owner_key = ? LIMIT 1",
+    jobId,
+    ownerKey,
+  );
+  if (!job) return { ok: false, status: 404, error: "not_found" };
+  if (job.status === "queued") {
+    // Only a still-queued row changes here, so a job claimed between the
+    // SELECT and this UPDATE reports not_active, and the caller's next poll
+    // shows the flag taking effect instead.
+    const canceled = db.run(
+      "UPDATE jobs SET status = 'canceled', completed_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+      Date.now(),
+      Date.now(),
+      jobId,
+    );
+    if (canceled.changes === 1) return { ok: true, outcome: "canceled" };
+    return { ok: false, status: 409, error: "not_active" };
+  }
+  if (job.status === "processing") {
+    db.run(
+      "UPDATE jobs SET cancel_requested = 1, updated_at = ? WHERE id = ? AND status = 'processing'",
+      Date.now(),
+      jobId,
+    );
+    return { ok: true, outcome: "stop_requested" };
+  }
+  return { ok: false, status: 409, error: "not_active" };
+}
+
 /**
  * Spotify track policy, mirroring the worker's (worker/worker/spotify.py).
  * Accepts `https://open.spotify.com/track/<22-char id>` — optionally behind
