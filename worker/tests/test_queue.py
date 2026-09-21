@@ -10,6 +10,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+import pytest
+
 from worker.database import JobQueue
 from worker.errors import ErrorCode
 from worker.stages import Stage
@@ -298,6 +300,71 @@ def test_progress_writes_are_best_effort_when_the_database_is_locked(tmp_path: P
     queue.close()
 
 
+def test_claim_reports_the_lock_that_blocked_it(tmp_path: Path) -> None:
+    """A failed BEGIN must not be masked by the ROLLBACK that follows it.
+
+    With another connection holding the write lock, BEGIN IMMEDIATE times out
+    and there is no transaction to unwind. Running ROLLBACK regardless raised
+    "cannot rollback - no transaction is active", so the log blamed a rollback
+    failure instead of the locked database that caused it.
+    """
+    queue = make_queue(tmp_path)
+    insert_queued_job(queue.database_path)
+    # Give up quickly instead of waiting out the real 5s busy timeout.
+    queue._connection.execute("PRAGMA busy_timeout = 10")
+
+    blocker = sqlite3.connect(queue.database_path, isolation_level=None, timeout=5.0)
+    try:
+        blocker.execute("BEGIN IMMEDIATE")  # holds the write lock
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            queue.claim_next_queued_job()
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
+
+    assert "locked" in str(caught.value)
+    # The queue is untouched by the failed attempt: the job is still claimable.
+    assert queue.claim_next_queued_job() is not None
+    queue.close()
+
+
+def test_discard_unpublished_results_keeps_published_outputs(tmp_path: Path) -> None:
+    """Failed jobs must not leave artifacts retention will never collect.
+
+    A Spotify fetch writes its album cover into results/{job_id}/ before
+    separation can run, and only a completed job ever receives an expires_at,
+    so a failed job's cover would otherwise stay on disk for good.
+    """
+    queue = make_queue(tmp_path)
+    job_id = "job_" + "b" * 32
+    insert_queued_job(queue.database_path, job_id)
+    results = queue.data_dir / "results" / job_id
+    results.mkdir(parents=True)
+    (results / "artwork.jpg").write_bytes(b"\xff\xd8\xffjpeg")
+
+    assert queue.discard_unpublished_results(job_id) is True
+    assert not results.exists()
+
+    # Published outputs are a different case: they belong to a job the user may
+    # still be able to download from, so they stay.
+    results.mkdir(parents=True)
+    (results / "vocals.mp3").write_bytes(b"audio")
+    queue.record_output(
+        job_id=job_id,
+        stem_key="vocals",
+        label="Extracted Vocals",
+        relative_path=f"results/{job_id}/vocals.mp3",
+        mime_type="audio/mpeg",
+        size_bytes=5,
+        duration_seconds=1.0,
+        sha256="0" * 64,
+        expires_at=None,
+    )
+    assert queue.discard_unpublished_results(job_id) is False
+    assert (results / "vocals.mp3").is_file()
+    queue.close()
+
+
 def test_pipeline_failure_lands_in_failed_status(tmp_path: Path) -> None:
     """End-to-end: a claimed upload whose source file is missing fails safely."""
     from worker.job_loop import process_job
@@ -307,6 +374,12 @@ def test_pipeline_failure_lands_in_failed_status(tmp_path: Path) -> None:
     job = queue.claim_next_queued_job()
     assert job is not None
 
+    # A link job writes its cover into results/ during the download, so the
+    # directory can exist before anything fails.
+    artwork_dir = queue.data_dir / "results" / job.id
+    artwork_dir.mkdir(parents=True)
+    (artwork_dir / "artwork.jpg").write_bytes(b"\xff\xd8\xff")
+
     # source_object_key points at a file that was never written.
     process_job(queue, job)
 
@@ -314,4 +387,5 @@ def test_pipeline_failure_lands_in_failed_status(tmp_path: Path) -> None:
     assert row[0] == "failed"
     assert row[1] in {ErrorCode.INVALID_AUDIO.value, ErrorCode.UNKNOWN.value}
     assert not queue.claim_next_queued_job(), "failed job must not be re-claimed"
+    assert not artwork_dir.exists(), "a failed job must not leave artifacts behind"
     queue.close()

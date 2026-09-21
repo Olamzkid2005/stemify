@@ -8,7 +8,9 @@ guarded so no terminal state ever moves backward.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import shutil
 import sqlite3
 import time
 import uuid
@@ -310,7 +312,13 @@ class JobQueue:
                 quality=row[8],
             )
         except BaseException:
-            self._connection.execute("ROLLBACK")
+            # Only unwind a transaction that actually opened: when BEGIN IMMEDIATE
+            # itself failed (a locked database is the realistic case, after the
+            # busy timeout), there is nothing to roll back and ROLLBACK would
+            # raise "cannot rollback - no transaction is active", replacing the
+            # caller's clear error with an unrelated one.
+            with contextlib.suppress(sqlite3.Error):
+                self._connection.execute("ROLLBACK")
             raise
         finally:
             cursor.close()
@@ -494,6 +502,33 @@ class JobQueue:
             (ErrorCode.CANCELED.value, "This job was canceled.", now, now, job_id),
         )
         return cursor.rowcount == 1
+
+    def discard_unpublished_results(self, job_id: str) -> bool:
+        """Delete a job's results directory when nothing was published to it.
+
+        Failing a job is not always the end of its artifacts: a Spotify fetch
+        writes the album cover straight into `results/{job_id}/` during the
+        download, and retention only deletes results for *expired* jobs — while
+        only a completed job ever receives an `expires_at`. Without this, a
+        failed link job leaves that cover on disk for good.
+
+        Published outputs are deliberately kept: they belong to a job the user
+        may still be able to download from. Returns True when a directory was
+        removed.
+        """
+        try:
+            published = self._connection.execute(
+                "SELECT 1 FROM job_outputs WHERE job_id = ? LIMIT 1", (job_id,)
+            ).fetchone()
+            if published is not None:
+                return False
+            directory = self.data_dir / "results" / job_id
+            if not directory.is_dir():
+                return False
+            shutil.rmtree(directory, ignore_errors=True)
+            return True
+        except Exception:  # noqa: BLE001 - tidying a failed job is never fatal
+            return False
 
     def write_heartbeat(self) -> None:
         """Upsert the single worker-liveness row (plan Section 19.2).
