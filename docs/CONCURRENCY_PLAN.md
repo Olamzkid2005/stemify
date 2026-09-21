@@ -172,6 +172,13 @@ error.
   ordering and tested.
 - Home page gains a "Your jobs" list: filename, mode, status, progress, and
   "Queued — N ahead" for waiting jobs, each linking to its job page.
+- The same poll also carries a **pool summary** (`configured`, `running`,
+  `threadsPerWorker`, RAM guidance), because the page already asks this endpoint
+  and a second poller could report a different machine. The strip says how many
+  workers are up, how many jobs they run at once, and what the pool needs —
+  guidance sized for the *configured* pool, so a crashed worker does not shrink
+  the estimate — and it stays silent until the first successful poll rather than
+  claiming "no worker" before looking. No PIDs leave the server.
 - Submitting while at least one job is active shows a warning and **still
   accepts**: "You already have N jobs running. Adding another shares the same
   CPU, so all of them will take longer."

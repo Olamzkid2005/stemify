@@ -4,15 +4,56 @@
   "title": "Job list response (GET /api/jobs)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["jobs"],
+  "required": ["jobs", "pool"],
   "properties": {
     "jobs": {
       "type": "array",
       "maxItems": 10,
       "items": { "$ref": "#/$defs/jobListItem" }
-    }
+    },
+    "pool": { "$ref": "#/$defs/pool" }
   },
   "$defs": {
+    "pool": {
+      "description": "Live worker pool, so the home page can say how many jobs run at once and what the machine needs for them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configured",
+        "running",
+        "threadsPerWorker",
+        "ramPerWorkerMb",
+        "ramTotalMb"
+      ],
+      "properties": {
+        "configured": {
+          "description": "Workers the launcher was asked to run (STEMIFY_WORKER_CONCURRENCY).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "running": {
+          "description": "Live worker rows right now; may be below `configured` after a crash.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "threadsPerWorker": {
+          "description": "Null when the launcher exported no thread budget — the UI omits it rather than guessing from this process's cores.",
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "ramPerWorkerMb": {
+          "description": "Measured peak RSS per worker, rounded up (docs/BENCHMARKS.md).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "ramTotalMb": {
+          "description": "Guidance for the configured pool: configured x ramPerWorkerMb.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "jobListItem": {
       "type": "object",
       "additionalProperties": false,

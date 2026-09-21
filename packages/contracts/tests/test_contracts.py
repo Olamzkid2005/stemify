@@ -380,17 +380,34 @@ def _list_item(**patch) -> dict:
     return item
 
 
+def _pool(**patch) -> dict:
+    """The live pool summary that rides on every list response."""
+    pool = {
+        "configured": 2,
+        "running": 2,
+        "threadsPerWorker": 2,
+        "ramPerWorkerMb": 1024,
+        "ramTotalMb": 2048,
+    }
+    pool.update(patch)
+    return pool
+
+
+def _list_body(jobs=None, pool=None) -> dict:
+    return {"jobs": [] if jobs is None else jobs, "pool": _pool() if pool is None else pool}
+
+
 def test_job_list_accepts_an_empty_list(registry) -> None:
     """A browser that has never submitted anything is a normal case."""
     validator = validator_for("job-list.schema.json", registry)
-    validator.validate({"jobs": []})
+    validator.validate(_list_body())
 
 
 def test_job_list_accepts_a_waiting_job_with_its_position(registry) -> None:
     validator = validator_for("job-list.schema.json", registry)
     validator.validate(
-        {
-            "jobs": [
+        _list_body(
+            [
                 _list_item(
                     status="queued",
                     progress=0,
@@ -399,7 +416,7 @@ def test_job_list_accepts_a_waiting_job_with_its_position(registry) -> None:
                     queuePosition=3,
                 )
             ]
-        }
+        )
     )
 
 
@@ -407,8 +424,8 @@ def test_job_list_accepts_active_and_finished_together(registry) -> None:
     """The real shape: a running job, a waiting one and a finished one."""
     validator = validator_for("job-list.schema.json", registry)
     validator.validate(
-        {
-            "jobs": [
+        _list_body(
+            [
                 _list_item(),
                 _list_item(status="queued", progress=0, queuePosition=1),
                 _list_item(
@@ -422,27 +439,27 @@ def test_job_list_accepts_active_and_finished_together(registry) -> None:
                     },
                 ),
             ]
-        }
+        )
     )
 
 
 def test_job_list_rejects_a_queued_job_without_a_position(registry) -> None:
     """"Queued — N ahead" is the point of the list; without a position it is guesswork."""
     validator = validator_for("job-list.schema.json", registry)
-    assert_invalid(validator, {"jobs": [_list_item(status="queued", progress=0)]})
+    assert_invalid(validator, _list_body([_list_item(status="queued", progress=0)]))
 
 
 def test_job_list_rejects_a_position_on_a_running_job(registry) -> None:
     validator = validator_for("job-list.schema.json", registry)
-    assert_invalid(validator, {"jobs": [_list_item(queuePosition=2)]})
+    assert_invalid(validator, _list_body([_list_item(queuePosition=2)]))
 
 
 def test_job_list_rejects_a_remote_artwork_url(registry) -> None:
     validator = validator_for("job-list.schema.json", registry)
     assert_invalid(
         validator,
-        {
-            "jobs": [
+        _list_body(
+            [
                 _list_item(
                     source={
                         "type": "spotify",
@@ -451,7 +468,7 @@ def test_job_list_rejects_a_remote_artwork_url(registry) -> None:
                     }
                 )
             ]
-        },
+        ),
     )
 
 
@@ -469,12 +486,48 @@ def test_job_list_rejects_a_remote_artwork_url(registry) -> None:
 )
 def test_job_list_rejects_invalid_items(registry, patch) -> None:
     validator = validator_for("job-list.schema.json", registry)
-    assert_invalid(validator, {"jobs": [_list_item(**patch)]})
+    assert_invalid(validator, _list_body([_list_item(**patch)]))
 
 
 def test_job_list_rejects_more_than_the_cap(registry) -> None:
     validator = validator_for("job-list.schema.json", registry)
-    assert_invalid(validator, {"jobs": [_list_item() for _ in range(11)]})
+    assert_invalid(validator, _list_body([_list_item() for _ in range(11)]))
+
+
+def test_job_list_rejects_a_missing_pool(registry) -> None:
+    """The home page reads the pool off this response; a list without it is broken."""
+    validator = validator_for("job-list.schema.json", registry)
+    assert_invalid(validator, {"jobs": []})
+
+
+def test_job_list_accepts_a_pool_without_a_thread_budget(registry) -> None:
+    """A worker loop run by hand has no thread budget: omit it, never guess it."""
+    validator = validator_for("job-list.schema.json", registry)
+    validator.validate(_list_body(pool=_pool(threadsPerWorker=None)))
+
+
+def test_job_list_accepts_a_pool_with_no_worker_running(registry) -> None:
+    """Every worker crashed: `running` is 0 and the pool is still configured."""
+    validator = validator_for("job-list.schema.json", registry)
+    validator.validate(_list_body(pool=_pool(running=0)))
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"configured": 0},
+        {"running": -1},
+        {"threadsPerWorker": 0},
+        {"configured": "2"},
+        {"ramPerWorkerMb": 0},
+        {"ramTotalMb": -1},
+        # Worker internals stay on the server: the strip needs counts, not pids.
+        {"pid": 4242},
+    ],
+)
+def test_job_list_rejects_nonsense_pool_numbers(registry, patch) -> None:
+    validator = validator_for("job-list.schema.json", registry)
+    assert_invalid(validator, _list_body(pool=_pool(**patch)))
 
 
 # --- job-events ----------------------------------------------------------
