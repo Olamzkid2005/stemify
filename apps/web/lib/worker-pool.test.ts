@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { totalmem } from "node:os";
 import { after, afterEach, describe, it } from "node:test";
 
 /**
@@ -11,7 +12,12 @@ import { after, afterEach, describe, it } from "node:test";
  */
 import "./test-env";
 import { db, closeDatabase } from "@/lib/db/client";
-import { DEFAULT_POOL_SIZE, RAM_PER_WORKER_MB, workerPoolStatus } from "@/lib/worker-pool";
+import {
+  DEFAULT_POOL_SIZE,
+  RAM_PER_WORKER_MB,
+  systemFreeRamMb,
+  workerPoolStatus,
+} from "@/lib/worker-pool";
 import { WORKER_STALE_MS } from "@/lib/worker-status";
 
 afterEach(() => {
@@ -148,5 +154,32 @@ describe("worker pool status", () => {
     // docs/BENCHMARKS.md measures 0.9-1.0 GB peak RSS per worker. Guidance that
     // understates it is worse than no guidance, so this is a floor, not a guess.
     assert.ok(RAM_PER_WORKER_MB >= 1024, "per-worker guidance must round the measurement up");
+  });
+
+  it("carries the free-memory figure it was given", () => {
+    assert.equal(workerPoolStatus(NOW, 512).freeRamMb, 512);
+  });
+
+  it("reports unreadable free memory as null, never as zero", () => {
+    // Zero would read as "this machine has no memory", which is a warning the
+    // machine may not deserve. Unknown and none are different answers.
+    assert.equal(workerPoolStatus(NOW, null).freeRamMb, null);
+  });
+
+  it("asks the machine for free memory when nobody injects a value", () => {
+    // The default path is the one production takes, so it is asserted against
+    // the real host rather than only through the injected form.
+    const { freeRamMb } = workerPoolStatus(NOW);
+    const totalMb = totalmem() / (1024 * 1024);
+    assert.ok(
+      freeRamMb === null ||
+        (Number.isInteger(freeRamMb) && freeRamMb >= 0 && freeRamMb <= totalMb),
+      `freeRamMb outside the machine's memory: ${freeRamMb} (total ${totalMb} MB)`,
+    );
+  });
+
+  it("probes free memory in whole megabytes", () => {
+    const free = systemFreeRamMb();
+    assert.ok(free === null || Number.isInteger(free), `expected whole MB, got ${free}`);
   });
 });
