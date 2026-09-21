@@ -70,7 +70,15 @@ def estimate_tempo(stereo_waveform: np.ndarray, sample_rate: int) -> tuple[float
         return None
     primary = float(tempo[0])
     secondary = float(tempo[1]) if tempo.size > 1 else primary
-    confidence = min(primary, secondary) / max(primary, secondary) if max(primary, secondary) > 0 else 0.0
+    # A zero (or negative) estimate is not a very slow song, it is a failed
+    # estimate: librosa reports it for material with no usable onsets. It must
+    # not become an analysis value — the manifest schema rejects bpm=0, so
+    # carrying it forward would fail an otherwise finished job at packaging —
+    # and the folding below multiplies by two until it reaches the tempo floor,
+    # which never terminates for zero. "Unusable" degrades instead.
+    if primary <= 0 or secondary <= 0:
+        return None
+    confidence = min(primary, secondary) / max(primary, secondary)
     return _clamp_tempo(primary), float(min(1.0, max(0.0, confidence)))
 
 
@@ -139,8 +147,15 @@ def _clamp_tempo(bpm: float) -> float:
     Halves above 180 and doubles below 70 once; boundary values pass through
     unchanged. A 190 BPM drum-and-bass read becomes 95; a 60 BPM ballad read
     becomes 120 only when strictly below the floor.
+
+    Non-positive input is returned unchanged rather than doubled: it is the
+    absence of a tempo, and `estimate_tempo` already turns that case into a
+    degradation, but this helper stays total so a future caller cannot turn a
+    zero into an unbounded loop.
     """
     value = float(bpm)
+    if not np.isfinite(value) or value <= 0.0:
+        return value
     while value > 180.0:
         value /= 2.0
     while value < 70.0:

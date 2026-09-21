@@ -30,6 +30,44 @@ def test_clamp_tempo_folds_into_dj_window(raw: float, expected: float) -> None:
     assert _clamp_tempo(raw) == pytest.approx(expected)
 
 
+def test_clamp_tempo_returns_non_positive_input_unchanged() -> None:
+    """A zero reading is not a very slow song, and folding it never terminates.
+
+    Doubling zero towards the 70 BPM floor loops forever, which is how a
+    finished separation looked hung: the heartbeat thread kept reporting the
+    worker as alive while the job never advanced.
+    """
+    assert _clamp_tempo(0.0) == 0.0
+    assert _clamp_tempo(-1.0) == -1.0
+
+
+def test_estimate_tempo_degrades_on_a_zero_reading(monkeypatch: pytest.MonkeyPatch) -> None:
+    """librosa reports 0 for material with no usable onsets: not a tempo.
+
+    Carrying an analysis value of 0 forward is worse than reporting none: the
+    manifest schema requires a positive bpm, so it turned an otherwise finished
+    job into a validation failure at packaging.
+    """
+
+    class FakeOnset:
+        @staticmethod
+        def onset_strength(*_args: object, **_kwargs: object) -> np.ndarray:
+            return np.zeros(64, dtype=np.float32)
+
+    class FakeFeature:
+        @staticmethod
+        def tempo(*_args: object, **_kwargs: object) -> np.ndarray:
+            return np.array([0.0])
+
+    fake = type("FakeLibrosa", (), {"onset": FakeOnset, "feature": FakeFeature})
+    monkeypatch.setattr(analysis_module, "_import_librosa", lambda: fake)
+
+    # One second at 100 Hz keeps the fixture tiny; the guard compares the mono
+    # sample count against the sample rate, so the ratio is what matters.
+    waveform = np.zeros((2, 100), dtype=np.float32)
+    assert analysis_module.estimate_tempo(waveform, 100) is None
+
+
 def test_analyze_track_degrades_when_librosa_missing() -> None:
     """The import-missing path must degrade, never raise (graceful contract)."""
     result = analyze_track(
