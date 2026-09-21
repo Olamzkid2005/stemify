@@ -384,6 +384,7 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                 ),
                 cancellation_checker=_cancellation_checker(queue, job.id),
                 quality=job.quality,
+                stem_selection=job.stem_selection,
             )
             _raise_if_canceled(queue, job.id)
 

@@ -319,6 +319,79 @@ def test_separate_full_stems_returns_three_non_overlapping_stems(
     np.testing.assert_allclose(stems["instrumental"], -2.0 * mixture, atol=1e-6)
 
 
+def test_separate_custom_returns_exactly_the_ticked_stems(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mode='custom' saves exactly the selection: model stems as-is, and the
+    instrumental residual of the ticked sources only (docs/STEM_SELECTION_PLAN.md).
+
+    With the stub returning the mixture per source, picking vocals+drums must
+    give instrumental = mixture - vocals - drums = -1x mixture, and nothing
+    else in the dict.
+    """
+    import numpy as np
+
+    _clear_model_cache()
+    profile = get_profile(DEFAULT_PROFILE_ID)
+    monkeypatch.setenv("STEMIFY_DATA_DIR", str(tmp_path / "data"))
+    captured = _install_fake_engine(monkeypatch, profile)
+
+    mixture = np.zeros((2, 100), dtype=np.float32)
+    mixture[0, :10] = 0.5
+    captured["mixture"] = mixture
+    stems = demucs_module.separate(
+        mixture,
+        profile,
+        mode="custom",
+        stem_selection=("vocals", "drums", "instrumental"),
+    )
+
+    assert set(stems) == {"vocals", "drums", "instrumental"}
+    np.testing.assert_allclose(stems["vocals"], mixture, atol=1e-6)
+    np.testing.assert_allclose(stems["drums"], mixture, atol=1e-6)
+    np.testing.assert_allclose(stems["instrumental"], -1.0 * mixture, atol=1e-6)
+
+
+def test_separate_custom_without_instrumental_saves_no_residual(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exactly what was ticked: no instrumental tick, no residual bounce."""
+    import numpy as np
+
+    _clear_model_cache()
+    profile = get_profile(DEFAULT_PROFILE_ID)
+    monkeypatch.setenv("STEMIFY_DATA_DIR", str(tmp_path / "data"))
+    captured = _install_fake_engine(monkeypatch, profile)
+
+    mixture = np.zeros((2, 100), dtype=np.float32)
+    captured["mixture"] = mixture
+    stems = demucs_module.separate(
+        mixture, profile, mode="custom", stem_selection=("bass",)
+    )
+    assert set(stems) == {"bass"}
+
+
+def test_separate_custom_refuses_missing_or_unknown_selection(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A selection outside the allowlist (or absent) fails loudly at the
+    adapter, before any inference happens."""
+    import numpy as np
+
+    _clear_model_cache()
+    profile = get_profile(DEFAULT_PROFILE_ID)
+    monkeypatch.setenv("STEMIFY_DATA_DIR", str(tmp_path / "data"))
+    _install_fake_engine(monkeypatch, profile)
+
+    mixture = np.zeros((2, 100), dtype=np.float32)
+    with pytest.raises(SeparationError):
+        demucs_module.separate(mixture, profile, mode="custom")
+    with pytest.raises(SeparationError):
+        demucs_module.separate(
+            mixture, profile, mode="custom", stem_selection=("piano",)
+        )
+
+
 def test_resolve_quality_presets_and_unknown_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

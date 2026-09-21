@@ -249,7 +249,7 @@ def _validate_manifest_minimally(manifest: dict[str, Any]) -> None:
         raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest source.sampleRate invalid")
     if source.get("channels") not in (1, 2):
         raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest source.channels invalid")
-    if separation.get("mode") not in ("vocals_instrumental", "full_stems", "drum_breakdown"):
+    if separation.get("mode") not in ("vocals_instrumental", "full_stems", "drum_breakdown", "custom"):
         raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest separation.mode invalid")
     if not separation.get("modelId") or not separation.get("modelRevision"):
         raise OutputError(ErrorCode.OUTPUT_VALIDATION_FAILED, "manifest model identity missing")

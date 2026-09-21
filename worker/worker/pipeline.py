@@ -84,6 +84,7 @@ def run_separation_stage(
     progress_callback: Any = None,
     cancellation_checker: Any = None,
     quality: str | None = None,
+    stem_selection: tuple[str, ...] | None = None,
 ) -> tuple[dict[str, Any], Any]:
     """Separate the canonical waveform into named numpy stems (plan 12.5).
 
@@ -140,6 +141,7 @@ def run_separation_stage(
             progress_callback=_on_model_progress,
             cancellation_checker=cancellation_checker,
             quality=quality,
+            stem_selection=stem_selection,
         )
     mixture = waveform
     if progress_callback:

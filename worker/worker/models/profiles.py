@@ -108,7 +108,7 @@ def resolve_quality(preset: str | None = None) -> tuple[str, float, int]:
         )
     return raw, quality[0], quality[1]
 
-_VALID_MODES = frozenset({"vocals_instrumental", "full_stems", "drum_breakdown"})
+_VALID_MODES = frozenset({"vocals_instrumental", "full_stems", "drum_breakdown", "custom"})
 _VALID_DEVICES = frozenset({"auto", "cpu", "cuda"})
 _INSTRUMENTAL_POLICIES = frozenset({"mixture_minus_vocals", "direct_model_output"})
 
@@ -143,8 +143,20 @@ def get_profile_for_mode(mode: str) -> ModelProfile:
     supports the mode it is used. Otherwise the first allowlisted profile (in
     registration order) that supports the mode is chosen: vocals_instrumental
     and full_stems -> the default 4-stem model, drum_breakdown -> drumsep.
+
+    'custom' (docs/STEM_SELECTION_PLAN.md) always resolves to the default
+    4-stem model: it is the same single inference pass with a different
+    save-list, so it is deliberately not a profile field — the profile
+    allowlist is the security gate and must not churn for a UI concept.
     """
     selected = get_profile(os.environ.get("STEMIFY_MODEL_PROFILE", DEFAULT_PROFILE_ID))
+    if mode == "custom":
+        if "vocals_instrumental" in selected.supported_modes:
+            return selected
+        raise SeparationError(
+            ErrorCode.MODEL_LOAD_FAILED,
+            "mode 'custom' requires the default whole-track profile",
+        )
     if mode in selected.supported_modes:
         return selected
     for profile in MODEL_PROFILES.values():

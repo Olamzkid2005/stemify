@@ -27,6 +27,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from worker.database import STEM_SELECTION_KEYS
 from worker.errors import ErrorCode
 from worker.models.base import ModelProfile, SeparationError
 from worker.models.profiles import (
@@ -444,6 +445,7 @@ def separate(
     progress_callback: ProgressCallback | None = None,
     cancellation_checker: CancellationChecker | None = None,
     quality: str | None = None,
+    stem_selection: tuple[str, ...] | None = None,
 ) -> dict[str, np.ndarray]:
     """Separate a canonical stereo waveform into named numpy stems (plan 12.5).
 
@@ -452,10 +454,26 @@ def separate(
     just the two boundary values when demucs' internals have drifted and the
     fallback path ran. Cancellation is honored before inference and at every
     chunk boundary on the split path.
+
+    mode='custom' (docs/STEM_SELECTION_PLAN.md) separates with the same single
+    inference pass and saves exactly `stem_selection`: the ticked model stems
+    plus, when instrumental is ticked, the mixture residual — which keeps
+    ticked stems + instrumental summing to the original mix exactly.
     """
     profile = profile or get_profile_for_mode(mode)
     validate_profile(profile)
-    if mode not in profile.supported_modes:
+    if mode == "custom":
+        if stem_selection is None or not stem_selection:
+            raise SeparationError(
+                ErrorCode.MODEL_LOAD_FAILED,
+                "mode 'custom' requires a stem selection",
+            )
+        if not set(stem_selection) <= set(STEM_SELECTION_KEYS):
+            raise SeparationError(
+                ErrorCode.MODEL_LOAD_FAILED,
+                f"stem selection {sorted(stem_selection)!r} is outside the allowlist",
+            )
+    elif mode not in profile.supported_modes:
         raise SeparationError(
             ErrorCode.MODEL_LOAD_FAILED,
             f"mode {mode!r} is not enabled for profile {profile.profile_id!r}",
@@ -521,7 +539,26 @@ def separate(
         stems[stem_name] = stem
 
     result: dict[str, np.ndarray] = {}
-    if mode == "vocals_instrumental":
+    if mode == "custom":
+        # docs/STEM_SELECTION_PLAN.md: exactly the ticked stems. Model stems are
+        # saved as-is; instrumental is the residual of every ticked model stem,
+        # so ticked + instrumental == the original mix by construction.
+        order = [key for key in STEM_SELECTION_KEYS if key in stem_selection]
+        residual_sources: list[np.ndarray] = []
+        for key in order:
+            if key == "instrumental":
+                continue
+            result[key] = stems[key]
+            residual_sources.append(stems[key])
+        if "instrumental" in stem_selection:
+            residual = waveform
+            for source in residual_sources:
+                residual = residual - source
+            result["instrumental"] = residual
+            _validate_stem(result["instrumental"], waveform, profile, np)
+        if not result:  # pragma: no cover — guarded by the allowlist check above
+            raise SeparationError(ErrorCode.MODEL_LOAD_FAILED, "empty stem selection")
+    elif mode == "vocals_instrumental":
         if profile.instrumental_policy != "mixture_minus_vocals":  # pragma: no cover - allowlisted
             raise SeparationError(ErrorCode.INFERENCE_FAILED, "unknown instrumental policy")
         result["vocals"] = stems["vocals"]

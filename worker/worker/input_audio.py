@@ -73,9 +73,11 @@ def max_duration_for_mode(mode: str) -> float:
 
     Refine jobs (`drum_breakdown`) work on a drum stem this worker produced, so
     the input is never longer than the upload that already passed this ladder;
-    they take the general cap.
+    they take the general cap. `custom` (docs/STEM_SELECTION_PLAN.md) is the
+    same single inference pass as the 3-stem mode, so it shares that cap —
+    the web's `maxDurationForMode` mirrors this exactly.
     """
-    if mode == "full_stems":
+    if mode in ("full_stems", "custom"):
         return FULL_STEMS_MAX_DURATION_SECONDS
     return MAX_DURATION_SECONDS
 

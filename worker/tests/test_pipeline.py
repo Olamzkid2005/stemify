@@ -76,6 +76,7 @@ def _fake_separate(
         progress_callback: Any = None,
         cancellation_checker: Any = None,
         quality: str | None = None,
+        stem_selection: Any = None,
     ) -> dict[str, Any]:
         if calls is not None:
             calls["progress_callback"] = progress_callback
