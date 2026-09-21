@@ -9,7 +9,13 @@
  */
 import { useEffect, useRef, useState } from "react";
 
-import { isActiveStatus, type JobListItem, type JobListResponse } from "@/lib/job-list-types";
+import {
+  isActiveStatus,
+  isPoolInfo,
+  type JobListItem,
+  type JobListResponse,
+  type WorkerPoolInfo,
+} from "@/lib/job-list-types";
 
 const ACTIVE_INTERVAL_MS = 2500;
 const IDLE_INTERVAL_MS = 15_000;
@@ -17,12 +23,17 @@ const IDLE_INTERVAL_MS = 15_000;
 export type JobListState = {
   jobs: JobListItem[];
   activeCount: number;
+  /**
+   * Machine summary from the same response, or null before the first successful
+   * poll (the strip renders nothing rather than flashing "no worker").
+   */
+  pool: WorkerPoolInfo | null;
   /** True when the last refresh failed; the list keeps its last known rows. */
   error: boolean;
   loading: boolean;
 };
 
-const EMPTY: JobListState = { jobs: [], activeCount: 0, error: false, loading: true };
+const EMPTY: JobListState = { jobs: [], activeCount: 0, pool: null, error: false, loading: true };
 
 export function useJobListPolling(): JobListState {
   const [state, setState] = useState<JobListState>(EMPTY);
@@ -41,8 +52,11 @@ export function useJobListPolling(): JobListState {
         const body = (await res.json()) as JobListResponse;
         const jobs = Array.isArray(body.jobs) ? body.jobs : [];
         const activeCount = jobs.filter((job) => isActiveStatus(job.status)).length;
+        // Validated, not trusted: the strip would otherwise render `undefined`
+        // workers if the field ever went missing.
+        const pool = isPoolInfo(body.pool) ? body.pool : null;
         delayRef.current = activeCount > 0 ? ACTIVE_INTERVAL_MS : IDLE_INTERVAL_MS;
-        setState({ jobs, activeCount, error: false, loading: false });
+        setState({ jobs, activeCount, pool, error: false, loading: false });
       } catch {
         // Keep whatever was rendered: a failed refresh is not an empty list.
         setState((prev) => ({ ...prev, error: true, loading: false }));

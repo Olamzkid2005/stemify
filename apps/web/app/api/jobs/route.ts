@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getOrCreateGuestId } from "@/lib/auth/guest";
 import { createJob } from "@/lib/jobs";
 import { listJobViews } from "@/lib/job-list";
+import { workerPoolStatus } from "@/lib/worker-pool";
 
 /**
  * GET /api/jobs (concurrency plan C4).
@@ -11,12 +12,18 @@ import { listJobViews } from "@/lib/job-list";
  * Owner-scoped in SQL and projected through the same `getJobView` the status
  * endpoint uses, so the list cannot show a field the single-job route hides.
  * A queued row carries its global queue position (1 = next to run).
+ *
+ * The pool summary rides along rather than getting its own endpoint: the page
+ * already polls this one, and two pollers could report two different machines.
  */
 export async function GET() {
   try {
     const ownerKey = await getOrCreateGuestId();
     const jobs = await listJobViews(ownerKey);
-    return NextResponse.json({ jobs }, { headers: { "cache-control": "no-store" } });
+    return NextResponse.json(
+      { jobs, pool: workerPoolStatus() },
+      { headers: { "cache-control": "no-store" } },
+    );
   } catch {
     // A list is convenience, never the source of truth: failing it must not
     // look like "you have no jobs", so the client can tell it apart.

@@ -9,7 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { JobsProvider } from "@/components/jobs-context";
 import { YourJobs } from "@/components/your-jobs";
-import type { JobListItem } from "@/lib/job-list-types";
+import type { JobListItem, WorkerPoolInfo } from "@/lib/job-list-types";
 
 /**
  * Home-page job list (concurrency plan C4). Covers the client half: one shared
@@ -52,12 +52,21 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
+/** The pool block rides on this response too (lib/worker-pool.ts). */
+const POOL: WorkerPoolInfo = {
+  configured: 2,
+  running: 2,
+  threadsPerWorker: 2,
+  ramPerWorkerMb: 1024,
+  ramTotalMb: 2048,
+};
+
 function respondWith(jobs: JobListItem[]): void {
   globalThis.fetch = (() =>
     Promise.resolve({
       ok: true,
       status: 200,
-      json: async () => ({ jobs }),
+      json: async () => ({ jobs, pool: POOL }),
     } as unknown as Response)) as typeof fetch;
 }
 

@@ -32,7 +32,38 @@ export type JobListItem = {
   statusUrl: string;
 };
 
-export type JobListResponse = { jobs: JobListItem[] };
+/**
+ * What the machine is carrying, sent alongside the list so the home page's
+ * pool strip updates on the same poll as the jobs (concurrency plan C4).
+ * Deliberately no PIDs: the job view keeps worker internals on the server, and
+ * a count plus an uptime-free summary answers the only question a person has.
+ */
+export type WorkerPoolInfo = {
+  configured: number;
+  running: number;
+  /** Null when the launcher exported no thread budget — omit rather than guess. */
+  threadsPerWorker: number | null;
+  ramPerWorkerMb: number;
+  ramTotalMb: number;
+};
+
+export type JobListResponse = { jobs: JobListItem[]; pool: WorkerPoolInfo };
+
+export function isPoolInfo(value: unknown): value is WorkerPoolInfo {
+  if (typeof value !== "object" || value === null) return false;
+  const pool = value as Record<string, unknown>;
+  const count = (key: string): boolean => {
+    const raw = pool[key];
+    return typeof raw === "number" && Number.isFinite(raw) && raw >= 0;
+  };
+  return (
+    count("configured") &&
+    count("running") &&
+    count("ramPerWorkerMb") &&
+    count("ramTotalMb") &&
+    (pool.threadsPerWorker === null || count("threadsPerWorker"))
+  );
+}
 
 /** Statuses that mean "still holding the machine". */
 export const ACTIVE_STATUSES = ["queued", "processing"] as const;

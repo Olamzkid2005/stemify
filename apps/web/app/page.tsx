@@ -1,4 +1,5 @@
 import { JobsProvider } from "@/components/jobs-context";
+import { PoolStatus } from "@/components/pool-status";
 import { SourcePicker } from "@/components/source-picker";
 import { YourJobs } from "@/components/your-jobs";
 import { spotifyEnabled } from "@/lib/capabilities";
@@ -62,12 +63,14 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Input Mode Switcher + Upload/YouTube/Spotify flows. The picker and
-            the job list share one poller (concurrency plan C4): the picker
-            warns when jobs are already running, and the list shows where each
-            one is, including its place in the queue. */}
+        {/* Input Mode Switcher + Upload/YouTube/Spotify flows. The picker, the
+            pool strip and the job list share one poller (concurrency plan C4):
+            the picker warns when jobs are already running, the strip says how
+            many workers will pick them up, and the list shows where each one
+            is, including its place in the queue. */}
         <JobsProvider>
           <SourcePicker spotifyAvailable={spotifyEnabled()} />
+          <PoolStatus />
           <YourJobs />
         </JobsProvider>
 
