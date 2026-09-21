@@ -134,7 +134,15 @@ export class LocalDatabase {
       this.connection.exec("COMMIT");
       return result;
     } catch (error) {
-      this.connection.exec("ROLLBACK");
+      // Only unwind a transaction that actually opened: if BEGIN IMMEDIATE
+      // itself failed (a locked database after the busy timeout), ROLLBACK
+      // throws "cannot rollback - no transaction is active" and would replace
+      // the caller's real error with that one.
+      try {
+        this.connection.exec("ROLLBACK");
+      } catch {
+        // nothing was opened; the original error is what matters
+      }
       throw error;
     }
   }
