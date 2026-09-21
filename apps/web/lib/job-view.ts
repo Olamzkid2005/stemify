@@ -7,6 +7,7 @@
 import { findJobArtwork, jobArtworkUrl } from "@/lib/artwork";
 import { db } from "@/lib/db/client";
 import { type JobOutputRow, type JobRow } from "@/lib/db/schema";
+import { isStemSelection, type StemSelectionKey } from "@/lib/limits";
 import { getLocalStorage } from "@/lib/storage";
 import { readZipEntryFromFile } from "@/lib/zip";
 import { workerStatus } from "@/lib/worker-status";
@@ -25,6 +26,21 @@ const USER_STAGES: Record<string, string> = {
   cleanup: "Preparing downloads",
   completed: "Completed",
 };
+
+/**
+ * Decode jobs.stem_selection for the view (stem-selection plan). The column is
+ * written by this process and defensively decoded: junk reads as absent, the
+ * same policy as the worker's claim path.
+ */
+function parseSelectionColumn(raw: string | null): StemSelectionKey[] | null {
+  if (raw === null || raw === "") return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return isStemSelection(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
 
 const DEFAULT_PROGRESS_MESSAGES: Record<string, string> = {
   starting: "Starting the local worker",
@@ -170,6 +186,10 @@ export async function getJobView(jobId: string, ownerKey: string): Promise<JobVi
     createdAt: isoTime(job.created_at),
     updatedAt: isoTime(job.updated_at),
   };
+  // The ticked stems for mode='custom' (stem-selection plan). Decoded here once
+  // so the progress line can say "3 stems" without re-deriving it per render.
+  const selection = parseSelectionColumn(job.stem_selection);
+  if (selection) view.stemSelection = selection;
 
   if (job.status === "completed") {
     const outputs = db.all<JobOutputRow>(

@@ -45,7 +45,7 @@ function queueText(job: JobListItem): string | null {
 }
 
 function detailLine(job: JobListItem): string {
-  const stemSummary = modeStemSummary(job.mode);
+  const stemSummary = modeStemSummary(job.mode, job.stemSelection);
   if (job.status === "failed") return job.progressMessage || "Something went wrong";
   if (isActiveStatus(job.status)) return `${stemSummary} · ${job.progressMessage}`;
   return `${stemSummary} · ${job.outputFormat.toUpperCase()}`;

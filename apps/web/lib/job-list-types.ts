@@ -5,6 +5,8 @@
  * job-view.ts: client components must never import the database layer.
  */
 
+import type { StemSelectionKey } from "@/lib/limits";
+
 export type JobListItem = {
   jobId: string;
   status: string;
@@ -13,6 +15,8 @@ export type JobListItem = {
   progressMessage: string;
   progress: number;
   mode: string;
+  /** The ticked stems for mode='custom' (stem-selection plan). */
+  stemSelection?: StemSelectionKey[];
   outputFormat: string;
   source: {
     type: "upload" | "youtube" | "spotify";

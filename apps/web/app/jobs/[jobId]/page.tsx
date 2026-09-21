@@ -287,7 +287,7 @@ function JobPageBody() {
         {job.progressMessage}
       </p>
       <p className="text-xs text-zinc-500">
-        {SOURCE_LABELS[job.source.type] ?? "Local upload"} · {job.userStage} · {modeStemSummary(job.mode)}
+        {SOURCE_LABELS[job.source.type] ?? "Local upload"} · {job.userStage} · {modeStemSummary(job.mode, job.stemSelection)}
         {totalElapsed ? ` · running ${totalElapsed}` : null}
       </p>
 
@@ -458,11 +458,13 @@ function CompletedView({
           </span>
         ) : null}
         <span className="rounded-full border border-zinc-800 bg-[#131317] px-4 py-1.5 text-xs font-medium text-zinc-400">
-          {mode === "full_stems"
-            ? "Drums, bass & instrumental"
-            : mode === "drum_breakdown"
-              ? "Drums refined"
-              : "Vocals & instrumental"}
+          {mode === "custom"
+            ? "Custom selection"
+            : mode === "full_stems"
+              ? "Drums, bass & instrumental"
+              : mode === "drum_breakdown"
+                ? "Drums refined"
+                : "Vocals & instrumental"}
         </span>
         {analysis ? (
           <span

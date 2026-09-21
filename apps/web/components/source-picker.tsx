@@ -9,14 +9,23 @@ import {
   DEFAULT_LIMITS,
   OUTPUT_FORMATS,
   QUALITY_PRESETS,
-  SEPARATION_MODES,
+  STEM_SELECTION_KEYS,
   maxDurationForMode,
+  modeFromSelection,
   type EffectiveLimits,
+  type StemSelectionKey,
 } from "@/lib/limits";
 
-type SeparationMode = (typeof SEPARATION_MODES)[number];
 type OutputFormat = (typeof OUTPUT_FORMATS)[number];
 type QualityPreset = (typeof QUALITY_PRESETS)[number];
+
+/** Grid labels for the tickable stems (stem-selection plan). */
+const STEM_LABELS: Record<StemSelectionKey, string> = {
+  vocals: "Vocals",
+  drums: "Drums",
+  bass: "Bass",
+  instrumental: "Instrumental",
+};
 
 /** UI labels + the honest cost of each preset (docs/BENCHMARKS.md). */
 const QUALITY_OPTIONS: { value: QualityPreset; label: string; hint: string }[] = [
@@ -175,10 +184,20 @@ export function SourcePickerForm({
   limits?: EffectiveLimits;
 }) {
   const [tab, setTab] = useState<SourceTab>("upload");
-  const [separationMode, setSeparationMode] = useState<SeparationMode>("vocals_instrumental");
+  // The stem grid replaces the old two-mode toggle (stem-selection plan): the
+  // ticked set IS the request, and modeFromSelection decides which mode value
+  // carries it. Default is the old default preset, vocals + instrumental.
+  const [selectedStems, setSelectedStems] = useState<StemSelectionKey[]>(["vocals", "instrumental"]);
+  const separationMode = modeFromSelection(selectedStems);
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("mp3");
   const [quality, setQuality] = useState<QualityPreset>("balanced");
   const [error, setError] = useState<string | null>(null);
+
+  const toggleStem = useCallback((key: StemSelectionKey) => {
+    setSelectedStems((previous) =>
+      previous.includes(key) ? previous.filter((item) => item !== key) : [...previous, key],
+    );
+  }, []);
 
   // Link tab state (secondary features — upload stays the default tab).
   const [url, setUrl] = useState("");
@@ -196,6 +215,8 @@ export function SourcePickerForm({
           body: JSON.stringify({
             source,
             mode: separationMode,
+            // Only custom carries the list; the fixed modes forbid it.
+            ...(separationMode === "custom" ? { stemSelection: selectedStems } : {}),
             outputFormat,
             quality,
             idempotencyKey: crypto.randomUUID(),
@@ -221,7 +242,7 @@ export function SourcePickerForm({
         setSubmitting(false);
       }
     },
-    [navigate, outputFormat, quality, separationMode, tab],
+    [navigate, outputFormat, quality, selectedStems, separationMode, tab],
   );
 
   const selectTab = useCallback((next: SourceTab) => {
@@ -410,21 +431,43 @@ export function SourcePickerForm({
       ) : null}
 
       <div className="mt-8 flex flex-col items-center">
-        <span className="mb-3 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Separation Mode</span>
-        <div className="flex items-center gap-1 rounded-xl border border-zinc-800/90 bg-[#121215] p-1">
-          <OptionButton
-            active={separationMode === "vocals_instrumental"}
-            onClick={() => setSeparationMode("vocals_instrumental")}
-          >
-            Vocals &amp; Instrumental <span className="font-normal text-zinc-600">(2-stem)</span>
-          </OptionButton>
-          <OptionButton
-            active={separationMode === "full_stems"}
-            onClick={() => setSeparationMode("full_stems")}
-          >
-            Drums, Bass &amp; Instrumental <span className="font-normal text-zinc-600">(3-stem)</span>
-          </OptionButton>
+        <span className="mb-3 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Choose one or more stems</span>
+        <div
+          role="group"
+          aria-label="Stems to extract"
+          className="grid w-full max-w-xs grid-cols-2 gap-2"
+        >
+          {STEM_SELECTION_KEYS.map((key) => {
+            const active = selectedStems.includes(key);
+            return (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => toggleStem(key)}
+                className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${
+                  active
+                    ? "border-purple-500/70 bg-purple-950/30 text-white shadow-lg shadow-purple-900/20"
+                    : "border-zinc-800 bg-[#131317] text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                }`}
+              >
+                <span className="flex items-center justify-center gap-2">
+                  {active ? (
+                    <svg viewBox="0 0 20 20" className="size-3.5 text-purple-400" fill="currentColor" aria-hidden="true">
+                      <path fillRule="evenodd" d="M16.7 5.3a1 1 0 0 1 0 1.4l-7.5 7.5a1 1 0 0 1-1.4 0l-3.5-3.5a1 1 0 1 1 1.4-1.4L8.5 12l6.8-6.7a1 1 0 0 1 1.4 0Z" clipRule="evenodd" />
+                    </svg>
+                  ) : null}
+                  {STEM_LABELS[key]}
+                </span>
+              </button>
+            );
+          })}
         </div>
+        <p className="mt-2 text-[11px] text-zinc-500" aria-live="polite" data-testid="stem-hint">
+          {selectedStems.length === 0
+            ? "Tick at least one stem"
+            : `You'll get ${selectedStems.length} stem${selectedStems.length === 1 ? "" : "s"}${selectedStems.includes("instrumental") ? " · instrumental is the rest of the mix" : ""}`}
+        </p>
       </div>
 
       <label className="mt-5 flex items-center gap-3 text-xs text-zinc-400">

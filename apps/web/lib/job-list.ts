@@ -39,6 +39,7 @@ function toListItem(view: Awaited<ReturnType<typeof getJobView>>, position: numb
     progress: view.progress,
     mode: view.mode,
     outputFormat: view.outputFormat,
+    ...(view.stemSelection ? { stemSelection: view.stemSelection } : {}),
     source: {
       type: view.source.type,
       filename: view.source.filename,

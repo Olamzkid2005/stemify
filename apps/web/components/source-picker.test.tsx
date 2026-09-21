@@ -152,6 +152,83 @@ async function flushPromises(): Promise<void> {
 }
 
 describe("SourcePickerForm", () => {
+  it("renders the stem grid with vocals and instrumental ticked by default", () => {
+    const container = render();
+    const group = container.querySelector('[role="group"][aria-label="Stems to extract"]');
+    assert.ok(group, "the stem grid is rendered");
+    const tiles = Array.from(group.querySelectorAll("button"));
+    assert.deepEqual(
+      tiles.map((tile) => tile.textContent?.trim()),
+      ["Vocals", "Drums", "Bass", "Instrumental"],
+    );
+    const pressed = tiles.filter((tile) => tile.getAttribute("aria-pressed") === "true");
+    assert.deepEqual(
+      pressed.map((tile) => tile.textContent?.trim()),
+      ["Vocals", "Instrumental"],
+      "the old default preset is the grid default",
+    );
+  });
+
+  it("maps the exact preset set to the fixed mode and omits stemSelection", async () => {
+    const container = render();
+    click(tab(container, "Spotify Link"));
+    type(linkInput(container), TRACK_URL);
+    click(acknowledgement(container));
+    // Default (vocals + instrumental) is the 2-stem preset: no selection sent.
+    fireSubmit(container);
+    await flushPromises();
+    assert.equal(fetchCalls.length, 1);
+    const sent = JSON.parse(String(fetchCalls[0].init.body));
+    assert.equal(sent.mode, "vocals_instrumental");
+    assert.equal(sent.stemSelection, undefined);
+  });
+
+  it("sends mode=custom with the ticked stems for a non-preset selection", async () => {
+    const container = render();
+    const group = container.querySelector('[role="group"][aria-label="Stems to extract"]');
+    assert.ok(group);
+    const drums = Array.from(group.querySelectorAll("button")).find(
+      (tile) => tile.textContent?.trim() === "Drums",
+    );
+    assert.ok(drums);
+    click(drums);
+
+    click(tab(container, "Spotify Link"));
+    type(linkInput(container), TRACK_URL);
+    click(acknowledgement(container));
+    fireSubmit(container);
+    await flushPromises();
+    const sent = JSON.parse(String(fetchCalls[0].init.body));
+    assert.equal(sent.mode, "custom");
+    assert.deepEqual(sent.stemSelection, ["vocals", "instrumental", "drums"]);
+  });
+
+  it("counts the stems live and refuses to describe an empty grid as a job", async () => {
+    const container = render();
+    const hint = () =>
+      container.querySelector('[data-testid="stem-hint"]')?.textContent ?? "(no hint)";
+    assert.match(hint(), /You'll get 2 stems/);
+
+    const group = container.querySelector('[role="group"][aria-label="Stems to extract"]');
+    assert.ok(group);
+    const tile = (label: string) =>
+      Array.from(group.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === label,
+      );
+    // Tick the two unticked stems (Vocals/Instrumental start on) -> all four.
+    for (const label of ["Drums", "Bass"]) {
+      const button = tile(label);
+      assert.ok(button, `no ${label} tile`);
+      click(button);
+    }
+    assert.match(hint(), /You'll get 4 stems/);
+    for (const label of ["Vocals", "Drums", "Bass", "Instrumental"]) {
+      const button = tile(label);
+      assert.ok(button);
+      click(button);
+    }
+    assert.match(hint(), /Tick at least one stem/);
+  });
   it("renders all three source tabs with upload selected", () => {
     const container = render();
 

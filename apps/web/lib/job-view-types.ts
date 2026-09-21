@@ -2,6 +2,7 @@
  * Client-safe job view types and stage mapping (plan §8.3/§11.3).
  * Split from job-view.ts so client components never import the DB.
  */
+import type { StemSelectionKey } from "@/lib/limits";
 import type { StageTiming } from "./stage-timings";
 
 export type JobView = {
@@ -24,6 +25,8 @@ export type JobView = {
   };
   mode: string;
   outputFormat: string;
+  /** The ticked stems for mode='custom'; absent for the fixed modes. */
+  stemSelection?: StemSelectionKey[];
   /** Per-job quality preset; absent when the job uses the worker default. */
   quality?: "fast" | "balanced";
   createdAt: string;
