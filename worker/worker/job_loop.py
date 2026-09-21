@@ -26,7 +26,13 @@ from worker import spotify
 from worker.database import ClaimedJob, JobQueue
 from worker.encoding import OutputError
 from worker.errors import ErrorCode
-from worker.input_audio import MAX_FILE_BYTES, InputAudioError, JobTempDir, prepare_source
+from worker.input_audio import (
+    MAX_FILE_BYTES,
+    InputAudioError,
+    JobTempDir,
+    max_duration_for_mode,
+    prepare_source,
+)
 from worker.models.base import SeparationError
 from worker.pipeline import (
     analyze_stage,
@@ -183,6 +189,11 @@ def _record_failure(queue: JobQueue, job: ClaimedJob, code: ErrorCode, error: Ex
     # anything without one falls back to the code.
     public = getattr(error, "public_message", None) or _public_message(code)
     queue.fail_job(job.id, code, public)
+    # A link job can already have written its album cover into the job's
+    # results directory before the failure. A failed job never gets an
+    # expires_at, so retention would never collect that file (see
+    # JobQueue.discard_unpublished_results).
+    queue.discard_unpublished_results(job.id)
 
 
 def _cancellation_checker(queue: JobQueue, job_id: str):
@@ -347,7 +358,16 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
                 if job.mode == "drum_breakdown"
                 else MAX_FILE_BYTES
             )
-            canonical_wav, probe = prepare_source(staged, job_dir, max_file_bytes=refine_limit)
+            # The duration cap is per mode (plan Section 9): the 3-stem split is
+            # capped lower than the 2-stem split. This is where a link source's
+            # duration is first knowable, so it is the enforced cap for every
+            # source type.
+            canonical_wav, probe = prepare_source(
+                staged,
+                job_dir,
+                max_file_bytes=refine_limit,
+                max_duration_seconds=max_duration_for_mode(job.mode),
+            )
 
             stems, mixture = run_separation_stage(
                 canonical_wav,
@@ -427,6 +447,7 @@ def process_job(queue: JobQueue, job: ClaimedJob) -> None:
     except SeparationError as error:
         if error.code == ErrorCode.CANCELED:
             queue.cancel_processing_job(job.id)
+            queue.discard_unpublished_results(job.id)
         else:
             _record_failure(queue, job, error.code, error)
     except OutputError as error:

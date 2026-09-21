@@ -216,3 +216,58 @@ def test_cleanup_after_retention_window_and_rerun(
     assert second.expired_jobs_marked == 0
     assert second.result_directories_deleted == 0
     queue.close()
+
+
+def test_duration_cap_follows_the_job_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Plan Section 9: the mode decides the duration cap, and the loop applies it.
+
+    The 3-stem split is capped below the 2-stem split. Only the job loop knows a
+    job's mode, so the cap has to be visible in what it hands to the validation
+    ladder: a configured limit that never reaches the ladder is not a limit.
+    """
+    from worker import input_audio
+    from worker.input_audio import max_duration_for_mode
+    from worker.job_loop import process_job
+
+    install_stub_engine(monkeypatch)
+    captured: list[float | None] = []
+    real_prepare = input_audio.prepare_source
+
+    def spy(
+        source: Path,
+        job_dir: Path,
+        max_file_bytes: int | None = None,
+        max_duration_seconds: float | None = None,
+    ) -> tuple[Path, object]:
+        captured.append(max_duration_seconds)
+        return real_prepare(source, job_dir, max_file_bytes, max_duration_seconds)
+
+    monkeypatch.setattr("worker.job_loop.prepare_source", spy)
+
+    queue, _ = seed_job_with_source(tmp_path, monkeypatch)
+    job = queue.claim_next_queued_job()
+    assert job is not None
+    process_job(queue, job)
+    assert captured == [max_duration_for_mode("vocals_instrumental")]
+
+    # Same flow, 3-stem mode: seeded as the 2-stem default, then switched the
+    # way the web app would have written it.
+    second_dir = tmp_path / "second"
+    second_dir.mkdir()
+    queue_two, job_two_id = seed_job_with_source(second_dir, monkeypatch)
+    connection = sqlite3.connect(queue_two.database_path)
+    try:
+        connection.execute("UPDATE jobs SET mode = 'full_stems' WHERE id = ?", (job_two_id,))
+        connection.commit()
+    finally:
+        connection.close()
+
+    job_two = queue_two.claim_next_queued_job()
+    assert job_two is not None
+    assert job_two.mode == "full_stems"
+    process_job(queue_two, job_two)
+
+    assert captured[1] == max_duration_for_mode("full_stems")
+    assert captured[0] != captured[1]
+    queue.close()
+    queue_two.close()
