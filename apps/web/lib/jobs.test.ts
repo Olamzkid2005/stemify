@@ -206,6 +206,56 @@ describe("createJob", () => {
     }
   });
 
+  it("refuses a YouTube link when this machine has switched YouTube off", async () => {
+    // The worker's STEMIFY_YOUTUBE_ENABLED kill switch is mirrored here (and in
+    // the picker): without this, the switch did nothing until the worker
+    // refused every job with the generic download message.
+    process.env.STEMIFY_YOUTUBE_ENABLED = "0";
+    const key = "client-key-youtube-off-0001";
+    try {
+      const result = await createJob({
+        ownerKey: OWNER,
+        body: {
+          ...structuredClone(validBody),
+          source: { type: "youtube", url: "https://www.youtube.com/watch?v=abc123" },
+          idempotencyKey: key,
+        },
+      });
+      assert.equal(result.ok, false);
+      if (!result.ok) {
+        // Distinct from unsupported_source, exactly like Spotify above: the link
+        // is valid, the machine is switched off, and the fixes differ.
+        assert.equal(result.error, "youtube_unavailable");
+        assert.equal(result.status, 400);
+      }
+      const row = db.get<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM jobs WHERE owner_key = ? AND idempotency_key_hash = ?",
+        OWNER,
+        idempotencyHash(OWNER, key),
+      );
+      assert.equal(row?.n, 0);
+    } finally {
+      process.env.STEMIFY_YOUTUBE_ENABLED = "1";
+    }
+  });
+
+  it("accepts a YouTube link when the switch is on, as it is by default", async () => {
+    delete process.env.STEMIFY_YOUTUBE_ENABLED;
+    try {
+      const result = await createJob({
+        ownerKey: OWNER,
+        body: {
+          ...structuredClone(validBody),
+          source: { type: "youtube", url: "https://youtu.be/abc123" },
+          idempotencyKey: "client-key-youtube-default-01",
+        },
+      });
+      assert.equal(result.ok, true);
+    } finally {
+      process.env.STEMIFY_YOUTUBE_ENABLED = "1";
+    }
+  });
+
   it("rejects an unknown source type", async () => {
     const body = {
       ...structuredClone(validBody),

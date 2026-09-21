@@ -6,11 +6,16 @@
  */
 import { createHmac, randomUUID } from "node:crypto";
 
-import { spotifyEnabled } from "@/lib/capabilities";
+import { spotifyEnabled, youtubeEnabled } from "@/lib/capabilities";
 import { db } from "@/lib/db/client";
 import { type JobRow, type JobStatus, type SeparationMode, type OutputFormat, type UploadRow } from "@/lib/db/schema";
 import { getStorage } from "@/lib/storage";
-import { CLIENT_LIMITS, OUTPUT_FORMATS, QUALITY_PRESETS, SEPARATION_MODES } from "@/lib/limits";
+import {
+  OUTPUT_FORMATS,
+  QUALITY_PRESETS,
+  SEPARATION_MODES,
+  serverEffectiveLimits,
+} from "@/lib/limits";
 
 export { OUTPUT_FORMATS, QUALITY_PRESETS, SEPARATION_MODES };
 
@@ -114,6 +119,13 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
     if (typeof url !== "string" || !isAllowedYouTubeUrl(url)) {
       return { ok: false, status: 400, error: "unsupported_source" };
     }
+    // Same reasoning as the Spotify check below: `STEMIFY_YOUTUBE_ENABLED=0`
+    // makes the worker refuse every YouTube job, so refuse it here, where the
+    // UI can say what to do about it, instead of accepting a job that dies on
+    // claim. (The worker defaults this ON; see lib/capabilities.ts.)
+    if (!youtubeEnabled()) {
+      return { ok: false, status: 400, error: "youtube_unavailable" };
+    }
   } else if (source.type === "spotify") {
     // Spotify plan S4: single tracks only. Album/playlist links and
     // spotify.link short links are rejected because their target cannot be
@@ -148,7 +160,9 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
 
     const info = await getStorage().headObject(upload.object_key);
     if (!info.exists) return { ok: false, status: 409, error: "object_missing" };
-    if (info.sizeBytes !== null && info.sizeBytes > CLIENT_LIMITS.maxUploadBytes) {
+    // Backstop for an object that reached storage another way; the upload route
+    // refuses over-size files before they are stored at all.
+    if (info.sizeBytes !== null && info.sizeBytes > serverEffectiveLimits().maxUploadBytes) {
       return { ok: false, status: 413, error: "file_too_large" };
     }
 

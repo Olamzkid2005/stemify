@@ -105,6 +105,58 @@ describe("active job limit default (concurrency plan C3)", () => {
   });
 });
 
+describe("upload size cap (plan Section 9)", () => {
+  const OWNER_CAP = "gid_capowner000000000001";
+
+  before(() => {
+    storage = new FakeStorage();
+    __setStorageForTests(storage);
+  });
+
+  after(() => {
+    delete process.env.MAX_UPLOAD_BYTES;
+    db.run("DELETE FROM jobs WHERE owner_key = ?", OWNER_CAP);
+    db.run("DELETE FROM uploads WHERE owner_key = ?", OWNER_CAP);
+  });
+
+  /** A 2 KB stored object plus the uploads row that points at it. */
+  function capBody(index: number): Record<string, unknown> {
+    const uploadId = `upl_${(index + 0x200).toString(16).padStart(32, "0")}`;
+    const objectKey = `sources/${uploadId}/song.mp3`;
+    db.run(
+      `INSERT OR REPLACE INTO uploads (id, owner_key, filename, object_key, size_bytes, expires_at)
+       VALUES (?, ?, 'song.mp3', ?, 2048, ?)`,
+      uploadId,
+      OWNER_CAP,
+      objectKey,
+      Date.now() + 60_000,
+    );
+    (storage as FakeStorage).put(objectKey, Buffer.alloc(2048));
+    return {
+      source: { type: "upload", uploadId, objectKey, filename: "song.mp3" },
+      mode: "vocals_instrumental",
+      outputFormat: "mp3",
+      idempotencyKey: `cap-key-${index.toString().padStart(20, "0")}`,
+    };
+  }
+
+  it("refuses a stored object larger than the configured cap", async () => {
+    process.env.MAX_UPLOAD_BYTES = "1024";
+    const refused = await createJob({ ownerKey: OWNER_CAP, body: capBody(1) });
+    assert.equal(refused.ok, false);
+    if (!refused.ok) {
+      assert.equal(refused.status, 413);
+      assert.equal(refused.error, "file_too_large");
+    }
+  });
+
+  it("accepts the same object at the shipped cap", async () => {
+    delete process.env.MAX_UPLOAD_BYTES;
+    const accepted = await createJob({ ownerKey: OWNER_CAP, body: capBody(2) });
+    assert.equal(accepted.ok, true);
+  });
+});
+
 describe("a browser may run a full pool (concurrency plan C3)", () => {
   const OWNER_POOL = "gid_poolowner00000000001";
 

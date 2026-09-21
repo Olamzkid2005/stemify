@@ -1,10 +1,10 @@
 /**
- * Machine capability flags (Spotify plan S2/S4).
+ * Machine capability flags (Spotify plan S2/S4, plan Task 14).
  *
  * The worker owns link-source *policy* (the allowlist, plan Section 8) and
  * re-validates every job. It also owns a **kill switch** per optional source,
  * because a source that needs operator setup cannot be served everywhere. This
- * module mirrors only that kill switch, so the web app never offers a source
+ * module mirrors only those switches, so the web app never offers a source
  * this machine has switched off — which is otherwise a job that is created and
  * then fails within milliseconds of being claimed.
  *
@@ -13,10 +13,23 @@
  * graph.
  */
 
-/** Truthiness the worker's kill switches accept (`worker/worker/spotify.py`). */
+/** Truthiness the worker's Spotify kill switch accepts (`worker/worker/spotify.py`). */
 function flagEnabled(name: string): boolean {
   const raw = (process.env[name] ?? "").trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
+}
+
+/**
+ * Whether this machine can serve YouTube links.
+ *
+ * Default **on**, mirroring `worker.youtube.youtube_enabled`: YouTube needs no
+ * operator setup, so only an explicit off value disables it. Note the
+ * asymmetry with Spotify below — that source defaults off because it needs a
+ * Web API app and a Premium account.
+ */
+export function youtubeEnabled(): boolean {
+  const raw = (process.env.STEMIFY_YOUTUBE_ENABLED ?? "1").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "no";
 }
 
 /**
