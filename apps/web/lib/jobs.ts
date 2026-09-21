@@ -11,6 +11,7 @@ import { db } from "@/lib/db/client";
 import { type JobRow, type JobStatus, type SeparationMode, type OutputFormat, type UploadRow } from "@/lib/db/schema";
 import { getStorage } from "@/lib/storage";
 import {
+  isStemSelection,
   OUTPUT_FORMATS,
   QUALITY_PRESETS,
   SEPARATION_MODES,
@@ -80,7 +81,7 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
     return { ok: false, status: 400, error: "invalid_request" };
   }
 
-  const { source, mode, outputFormat, quality, idempotencyKey } = input.body;
+  const { source, mode, outputFormat, quality, idempotencyKey, stemSelection } = input.body;
   if (
     !(SEPARATION_MODES as readonly unknown[]).includes(mode) ||
     !(OUTPUT_FORMATS as readonly unknown[]).includes(outputFormat) ||
@@ -88,6 +89,19 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
     idempotencyKey.length < 16 ||
     idempotencyKey.length > 128
   ) {
+    return { ok: false, status: 400, error: "invalid_request" };
+  }
+  // Mirror the job-request contract's if/then exactly (stem-selection plan):
+  // custom REQUIRES a valid selection; the fixed modes FORBID one — a selection
+  // alongside a fixed mode could only silently disagree with what that mode
+  // computes, so it is refused rather than ignored. Which mode a picker
+  // selection means is decided client-side (modeFromSelection in limits.ts).
+  const hasSelection = stemSelection !== undefined && stemSelection !== null;
+  if (hasSelection) {
+    if (mode !== "custom" || !isStemSelection(stemSelection)) {
+      return { ok: false, status: 400, error: "invalid_request" };
+    }
+  } else if (mode === "custom") {
     return { ok: false, status: 400, error: "invalid_request" };
   }
   // Quality is optional: undefined/null = worker default (STEMIFY_QUALITY);
@@ -184,8 +198,8 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
   db.run(
     `INSERT OR IGNORE INTO jobs (
       id, owner_key, source_type, source_filename, source_object_key, source_url,
-      mode, output_format, quality, status, idempotency_key_hash
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
+      mode, output_format, quality, stem_selection, status, idempotency_key_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)`,
     jobId,
     input.ownerKey,
     source.type,
@@ -195,6 +209,7 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
     mode as SeparationMode,
     outputFormat as OutputFormat,
     typeof quality === "string" ? quality : null,
+    hasSelection && isStemSelection(stemSelection) ? JSON.stringify(stemSelection) : null,
     keyHash,
   );
 

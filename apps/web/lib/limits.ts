@@ -2,8 +2,43 @@
  * Client-safe product limits (plan Section 9). Server-side validation in the
  * API routes is authoritative; these exist for fast client feedback only.
  */
-export const SEPARATION_MODES = ["vocals_instrumental", "full_stems"] as const;
+export const SEPARATION_MODES = ["vocals_instrumental", "full_stems", "custom"] as const;
 export const OUTPUT_FORMATS = ["mp3", "wav", "flac", "ogg", "m4a"] as const;
+
+/**
+ * Tickable stems for the custom mode (docs/STEM_SELECTION_PLAN.md). Order is
+ * the grid's display order and the worker's canonical stem order; mirrors the
+ * contracts stemSelection def and the worker's STEM_SELECTION_KEYS.
+ */
+export const STEM_SELECTION_KEYS = ["vocals", "drums", "bass", "instrumental"] as const;
+export type StemSelectionKey = (typeof STEM_SELECTION_KEYS)[number];
+
+/**
+ * True when the value is exactly a stem selection: 1-4 unique known keys.
+ * This is the same shape the job-request contract enforces.
+ */
+export function isStemSelection(value: unknown): value is StemSelectionKey[] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 1 &&
+    value.length <= STEM_SELECTION_KEYS.length &&
+    value.every((item) => (STEM_SELECTION_MODES as readonly unknown[]).includes(item)) &&
+    new Set(value).size === value.length
+  );
+}
+const STEM_SELECTION_MODES = STEM_SELECTION_KEYS;
+
+/**
+ * The mode a selection produces: the fixed modes are literal special cases
+ * (the old toggle's two options), anything else is custom. Shared by the
+ * picker, the job service and the tests so all three agree on one mapping.
+ */
+export function modeFromSelection(selection: readonly string[]): "vocals_instrumental" | "full_stems" | "custom" {
+  const set = [...selection].sort().join(",");
+  if (set === "instrumental,vocals") return "vocals_instrumental";
+  if (set === "bass,drums,instrumental") return "full_stems";
+  return "custom";
+}
 
 /**
  * Per-job quality presets (STEMIFY_QUALITY values). The worker resolves them
@@ -46,7 +81,12 @@ export const UPLOAD_STEM_KEYS = [
  * Short "what you get" summary for a separation mode, shared by the job page
  * and the home-page job list so the two can never describe a mode differently.
  */
-export function modeStemSummary(mode: string): string {
+export function modeStemSummary(mode: string, stemSelection?: readonly string[] | null): string {
+  if (mode === "custom") {
+    return stemSelection && stemSelection.length > 0
+      ? `${stemSelection.length} stem${stemSelection.length === 1 ? "" : "s"}`
+      : "custom stems";
+  }
   if (mode === "full_stems") return "3 stems";
   if (mode === "drum_breakdown") return "4 drum parts";
   return "2 stems";
@@ -115,7 +155,10 @@ export function maxDurationForMode(
   mode: string,
   limits: EffectiveLimits = DEFAULT_LIMITS,
 ): number {
-  return mode === "full_stems" ? limits.fullStemsMaxDurationSeconds : limits.maxDurationSeconds;
+  // custom is the same single inference pass as the 3-stem mode, so it shares
+  // its cap — mirrors worker.input_audio.max_duration_for_mode exactly.
+  if (mode === "full_stems" || mode === "custom") return limits.fullStemsMaxDurationSeconds;
+  return limits.maxDurationSeconds;
 }
 
 export const CLIENT_LIMITS = {

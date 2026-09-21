@@ -68,6 +68,63 @@ describe("createJob", () => {
     }
   });
 
+  it("stores a custom selection with the custom mode", async () => {
+    const custom = await createJob({
+      ownerKey: OWNER,
+      body: {
+        ...structuredClone(validBody),
+        mode: "custom",
+        stemSelection: ["vocals", "drums", "instrumental"],
+        idempotencyKey: "client-key-custom00000001",
+      },
+    });
+    assert.equal(custom.ok, true);
+    const customRow = db.get<{ mode: string; stem_selection: string | null }>(
+      "SELECT mode, stem_selection FROM jobs WHERE id = ?",
+      (custom as { ok: true; job: { id: string } }).job.id,
+    );
+    assert.equal(customRow?.mode, "custom");
+    assert.equal(customRow?.stem_selection, '["vocals","drums","instrumental"]');
+  });
+
+  it("refuses junk selections instead of building the wrong archive", async () => {
+    for (const stemSelection of [[], ["piano"], ["drums", "drums"], "vocals", ["vocals", 5]]) {
+      const result = await createJob({
+        ownerKey: OWNER,
+        body: {
+          ...structuredClone(validBody),
+          mode: "custom",
+          stemSelection,
+          idempotencyKey: `client-key-bad${Math.random().toString(16).slice(2, 10)}`,
+        },
+      });
+      assert.equal(result.ok, false, `expected refusal for ${JSON.stringify(stemSelection)}`);
+      if (!result.ok) assert.equal(result.status, 400);
+    }
+    // A selection on a fixed mode disagrees with what that mode computes,
+    // and custom without one is meaningless: the contract forbids both.
+    const fixed = await createJob({
+      ownerKey: OWNER,
+      body: {
+        ...structuredClone(validBody),
+        stemSelection: ["vocals"],
+        idempotencyKey: "client-key-fixed00000001",
+      },
+    });
+    assert.equal(fixed.ok, false);
+    if (!fixed.ok) assert.equal(fixed.status, 400);
+    const bare = await createJob({
+      ownerKey: OWNER,
+      body: {
+        ...structuredClone(validBody),
+        mode: "custom",
+        idempotencyKey: "client-key-bare000000001",
+      },
+    });
+    assert.equal(bare.ok, false);
+    if (!bare.ok) assert.equal(bare.status, 400);
+  });
+
   it("returns the same job for a repeated idempotency key", async () => {
     const body = { ...structuredClone(validBody), idempotencyKey: "client-key-repeat-000000001" };
     const first = await createJob({ ownerKey: OWNER, body });
