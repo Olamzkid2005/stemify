@@ -155,14 +155,17 @@ def measure_model_load(profile_id: str) -> dict:
 
 
 def _find_checkpoint(profile) -> Path | None:
-    """Locate the cached checkpoint file (torch.hub layout) for size reporting."""
-    import os
+    """The cached checkpoint file this machine loaded, for size reporting.
 
-    cache_root = Path(os.environ.get("STEMIFY_MODEL_DIR", "data/models"))
-    for candidate in cache_root.rglob("*.th"):
-        if profile.checkpoint_checksum in candidate.name:
-            return candidate
-    return None
+    Asked of the adapter rather than re-derived here: `_checkpoint_path` is the
+    exact path `load_model` verifies the checksum of, so the report cannot
+    describe a directory the worker never read (it used to, and reported
+    `checkpoint_bytes: null` in the documented `worker/` invocation).
+    """
+    from worker.models.demucs import _checkpoint_path
+
+    checkpoint = _checkpoint_path(profile)
+    return checkpoint if checkpoint.is_file() else None
 
 
 def measure_separation(seconds: float, profile_id: str) -> dict:

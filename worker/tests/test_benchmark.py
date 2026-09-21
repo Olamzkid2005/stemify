@@ -15,7 +15,33 @@ from typing import Any
 
 import pytest
 
-from worker.benchmark import DEFAULT_DURATIONS, _environment, _make_tone_wav, run_benchmark
+from worker.benchmark import (
+    DEFAULT_DURATIONS,
+    _environment,
+    _find_checkpoint,
+    _make_tone_wav,
+    run_benchmark,
+)
+from worker.models.profiles import DEFAULT_PROFILE
+
+
+def test_checkpoint_report_uses_the_path_the_adapter_loads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The reported size must describe the checkpoint the loader verified.
+
+    This used to re-derive a directory of its own, so running the benchmark the
+    way its docstring says (`from worker/`) reported `checkpoint_bytes: null`
+    for a checkpoint that was right there.
+    """
+    cache = tmp_path / "models"
+    checkpoint = cache / "hub" / "checkpoints" / Path(DEFAULT_PROFILE.checkpoint_identifier).name
+    checkpoint.parent.mkdir(parents=True)
+    monkeypatch.setenv("TORCH_HOME", str(cache))
+
+    assert _find_checkpoint(DEFAULT_PROFILE) is None, "missing file must report nothing"
+    checkpoint.write_bytes(b"weights")
+    assert _find_checkpoint(DEFAULT_PROFILE) == checkpoint
 
 
 def test_fixture_is_deterministic_and_valid(tmp_path: Path) -> None:

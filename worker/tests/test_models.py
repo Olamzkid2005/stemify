@@ -9,6 +9,7 @@ scheduled fixture runs (plan Section 17.3).
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -43,6 +44,40 @@ def test_unknown_profile_is_rejected() -> None:
     with pytest.raises(SeparationError) as excinfo:
         get_profile("not_a_profile")
     assert excinfo.value.code == ErrorCode.MODEL_LOAD_FAILED
+
+
+def test_model_dir_follows_the_documented_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """STEMIFY_MODEL_DIR is honoured (it is documented in five places).
+
+    It used to be read by nothing, so an operator pointing the cache elsewhere
+    silently got the default directory and an 84MB re-download.
+    """
+    absolute = tmp_path / "elsewhere"
+    monkeypatch.setenv("STEMIFY_MODEL_DIR", str(absolute))
+    assert demucs_module._default_model_dir() == absolute
+
+    # A relative value resolves against the repository root, not the process cwd:
+    # the launcher runs the worker from worker/, so `.env.example`'s
+    # ./data/models would otherwise mean worker/data/models.
+    monkeypatch.setenv("STEMIFY_MODEL_DIR", "./data/models")
+    assert demucs_module._default_model_dir() == (
+        demucs_module._REPO_ROOT / "data" / "models"
+    ).resolve()
+
+
+def test_model_dir_falls_back_to_the_data_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("STEMIFY_MODEL_DIR", raising=False)
+    monkeypatch.setenv("STEMIFY_DATA_DIR", str(tmp_path / "data"))
+    assert demucs_module._default_model_dir() == tmp_path / "data" / "models"
+
+    # Blank is not an override: it means "unset" (start.sh and .env examples use
+    # an empty value to mean "leave the default alone").
+    monkeypatch.setenv("STEMIFY_MODEL_DIR", "   ")
+    assert demucs_module._default_model_dir() == tmp_path / "data" / "models"
 
 
 def test_mode_resolves_profile_and_explicit_override_wins() -> None:

@@ -50,6 +50,10 @@ _INSTALL_HINT = (
     "Run: pip install -r worker/requirements.txt"
 )
 
+# Repository root, used to resolve a relative STEMIFY_MODEL_DIR (see
+# _default_model_dir). This file is <root>/worker/worker/models/demucs.py.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 # Gross clipping/overflow bound for sanity checks; normalised audio stays well
 # below this even for mixture-minus-vocals stems.
 MAX_ABSOLUTE_AMPLITUDE = 8.0
@@ -578,6 +582,23 @@ def _import_demucs_pretrained() -> Any:
 
 
 def _default_model_dir() -> Path:
+    """Where the model cache lives: `STEMIFY_MODEL_DIR`, else `<data dir>/models`.
+
+    `STEMIFY_MODEL_DIR` is the knob documented in .env.example, worker/README.md
+    and docs/BENCHMARKS.md; it is read here because this is the one place that
+    decides the cache location (both adapters reach it through this function and
+    `_checkpoint_path`).
+
+    A relative value resolves against the repository root, not the process cwd:
+    the launcher runs the worker from `worker/`, so `.env.example`'s
+    `./data/models` would otherwise mean `worker/data/models` — a different
+    directory, which silently re-downloads the checkpoint the operator already
+    has.
+    """
+    override = (os.environ.get("STEMIFY_MODEL_DIR") or "").strip()
+    if override:
+        candidate = Path(override).expanduser()
+        return candidate if candidate.is_absolute() else (_REPO_ROOT / candidate).resolve()
     data_dir = Path(os.environ.get("STEMIFY_DATA_DIR") or Path.cwd() / "data")
     return data_dir / "models"
 
