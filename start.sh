@@ -8,7 +8,11 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 WEB_PID=""
-WORKER_PID=""
+# One entry per worker slot in the pool (concurrency plan C2). Every slot is
+# tracked individually: cleanup() must kill all of them, or Ctrl+C leaves the
+# extras running, silently claiming and processing jobs while the app is shut.
+WORKER_PIDS=()
+WORKER_STARTED=()
 
 PREFLIGHT_FAILED=0
 
@@ -87,6 +91,34 @@ else
   echo "No Python with numpy/soundfile found; worker will not start" \
     "(see worker/README.md)." >&2
 fi
+
+# --------------------------------------------------------------- worker pool
+# STEMIFY_WORKER_CONCURRENCY is how many jobs run at once (concurrency plan
+# C2). The pool is explicit, never auto-sized: each worker holds its own copy
+# of the separation model, so the operator decides what the machine can carry.
+POOL="${STEMIFY_WORKER_CONCURRENCY:-2}"
+case "$POOL" in
+  *[!0-9]*|"")
+    echo "STEMIFY_WORKER_CONCURRENCY '$POOL' is not a number; using 1." >&2
+    POOL=1
+    ;;
+  0)
+    echo "STEMIFY_WORKER_CONCURRENCY must be at least 1; using 1." >&2
+    POOL=1
+    ;;
+esac
+
+# Split the machine's cores across the pool (plan 3.4): N workers each using
+# every core is worse than N workers sharing them, because one inference
+# already saturates the box. An explicit STEMIFY_WORKER_THREADS wins — the
+# operator may know the machine better than this arithmetic does.
+if [ -z "${STEMIFY_WORKER_THREADS:-}" ]; then
+  CORES="$("${STEMIFY_PYTHON_BIN}" ${STEMIFY_PYTHON_ARGS} -c 'import os; print(os.cpu_count() or 1)' 2>/dev/null)"
+  case "$CORES" in *[!0-9]*|"") CORES=1 ;; esac
+  STEMIFY_WORKER_THREADS=$((CORES / POOL))
+  [ "$STEMIFY_WORKER_THREADS" -lt 1 ] && STEMIFY_WORKER_THREADS=1
+fi
+export STEMIFY_WORKER_THREADS
 
 if [ "${STEMIFY_SKIP_PREFLIGHT:-0}" != "1" ]; then
   echo "== Stemify startup checks =="
@@ -170,7 +202,8 @@ echo "Stemify dev server: http://localhost:3000 (Ctrl+C to stop)"
 
 cleanup() {
   local status=$?
-  for pid in "${WEB_PID:-}" "${WORKER_PID:-}"; do
+  local pid
+  for pid in "${WEB_PID:-}" "${WORKER_PIDS[@]:-}"; do
     if [ -n "$pid" ] && kill -0 "$pid" >/dev/null 2>&1; then
       kill "$pid" 2>/dev/null
       wait "$pid" 2>/dev/null
@@ -187,17 +220,66 @@ trap cleanup EXIT INT TERM
 HOSTNAME=127.0.0.1 npm run dev -w apps/web &
 WEB_PID=$(jobs -p | tail -1)
 
-# Python worker process; a missing runtime degrades to web-only operation
-# (upload UI works, jobs fail with a clear setup message). Runs with worker/ as
-# cwd: the `worker` package is worker/worker/, and `python -m worker.job_loop`
-# from the repo root would not resolve it. PYTHONPATH (set during resolution)
-# carries the project-local dependency dir when one is in use.
-if "${STEMIFY_PYTHON_BIN}" ${STEMIFY_PYTHON_ARGS} -c "import numpy, soundfile" >/dev/null 2>&1; then
+# Python worker pool; a missing runtime degrades to web-only operation (upload
+# UI works, jobs fail with a clear setup message). Each slot runs with worker/
+# as cwd: the `worker` package is worker/worker/, and `python -m
+# worker.job_loop` from the repo root would not resolve it. PYTHONPATH (set
+# during resolution) carries the project-local dependency dir when one is in
+# use. `jobs -p | tail -1` instead of $! for the same reason as the web process
+# above, and no pipe on the command itself: a pipeline would report the PID of
+# the last stage, not the worker, and cleanup() would kill the wrong process.
+SLOT_CHECK_SECONDS=2
+# A slot that dies young is not restarted: an unusable runtime would otherwise
+# become a fast crash-loop that floods the log with identical tracebacks.
+MIN_SLOT_UPTIME_SECONDS=5
+
+start_worker_slot() {
+  local index="$1"
   ( cd worker && exec "${STEMIFY_PYTHON_BIN}" ${STEMIFY_PYTHON_ARGS} -m worker.job_loop ) &
-  WORKER_PID=$(jobs -p | tail -1)
-  echo "Worker started (pid $WORKER_PID)"
+  WORKER_PIDS[$index]=$(jobs -p | tail -1)
+  WORKER_STARTED[$index]=$(date +%s)
+  echo "Worker slot $((index + 1)) started (pid ${WORKER_PIDS[$index]})"
+}
+
+# Replace every slot that has exited, so one crashed job does not silently
+# shrink the pool for the rest of the session.
+respawn_dead_slots() {
+  local index pid now uptime
+  for index in "${!WORKER_PIDS[@]}"; do
+    pid="${WORKER_PIDS[$index]:-}"
+    [ -n "$pid" ] || continue
+    kill -0 "$pid" >/dev/null 2>&1 && continue
+    now=$(date +%s)
+    uptime=$((now - ${WORKER_STARTED[$index]:-0}))
+    if [ "$uptime" -ge "$MIN_SLOT_UPTIME_SECONDS" ]; then
+      echo "Worker slot $((index + 1)) exited after ${uptime}s; restarting it" >&2
+      start_worker_slot "$index"
+    else
+      echo "Worker slot $((index + 1)) exited immediately; not restarting it" \
+        "(see the error above)." >&2
+      WORKER_PIDS[$index]=""
+    fi
+  done
+}
+
+echo "Worker pool: ${POOL} process(es), ${STEMIFY_WORKER_THREADS} thread(s) each"
+if "${STEMIFY_PYTHON_BIN}" ${STEMIFY_PYTHON_ARGS} -c "import numpy, soundfile" >/dev/null 2>&1; then
+  for ((slot = 0; slot < POOL; slot++)); do
+    start_worker_slot "$slot"
+  done
 else
   echo "Worker not started: no Python with numpy/soundfile found (see worker/README.md)" >&2
+fi
+
+# The web process's lifetime is the application's lifetime; while it runs, keep
+# the pool alive (plan C2). This is the monitor loop the `wait` above used to
+# be: a dead slot is noticed and respawned, and Ctrl+C still reaches every
+# child through the trap.
+if [ -n "${WEB_PID:-}" ]; then
+  while kill -0 "$WEB_PID" >/dev/null 2>&1; do
+    respawn_dead_slots
+    sleep "$SLOT_CHECK_SECONDS"
+  done
 fi
 
 wait "$WEB_PID"
