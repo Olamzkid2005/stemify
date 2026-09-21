@@ -5,7 +5,7 @@
  * after unchanged responses, stops at terminal states, pauses when the tab
  * is hidden and resumes on return.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { isTerminalStatus, type JobView } from "@/lib/job-view-types";
 
@@ -18,15 +18,25 @@ type PollState = {
   loading: boolean;
 };
 
-export function useJobPolling(jobId: string): PollState {
+export function useJobPolling(jobId: string): PollState & {
+  /** POST the cancel request; the next poll reflects the new state. */
+  cancel: () => Promise<void>;
+  /** True between the button press and the request settling. */
+  cancelPending: boolean;
+} {
   const [state, setState] = useState<PollState>({
     job: null,
     error: null,
     loading: true,
   });
+  const [cancelPending, setCancelPending] = useState(false);
   const backoffRef = useRef(1);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stoppedRef = useRef(false);
+
+  // Poll once right after a cancel: the state change (canceled / stopping
+  // message) should appear immediately, not up to one interval later.
+  const pollNowRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     stoppedRef.current = false;
@@ -65,6 +75,12 @@ export function useJobPolling(jobId: string): PollState {
       schedule();
     }
 
+    pollNowRef.current = () => {
+      if (stoppedRef.current) return;
+      if (timerRef.current) clearTimeout(timerRef.current);
+      void tick();
+    };
+
     void tick();
     return () => {
       stoppedRef.current = true;
@@ -73,5 +89,21 @@ export function useJobPolling(jobId: string): PollState {
     };
   }, [jobId]);
 
-  return state;
+  const cancel = useCallback(async () => {
+    setCancelPending(true);
+    try {
+      // The response body is deliberately ignored: the next poll is the truth
+      // about the state, and it is triggered right away below. A 409 (already
+      // finished between render and click) shows up there as the terminal
+      // state it already is — no error UI for winning a race.
+      await fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+    } catch {
+      // Poll continues; the button stays available while the job is active.
+    } finally {
+      setCancelPending(false);
+      pollNowRef.current();
+    }
+  }, [jobId]);
+
+  return { ...state, cancel, cancelPending };
 }

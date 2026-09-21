@@ -20,6 +20,8 @@ const JobsContext = createContext<JobListState>({
   pool: null,
   error: false,
   loading: true,
+  cancelJob: () => {},
+  cancelingJobId: null,
 });
 
 export function JobsProvider({ children }: { children: ReactNode }) {

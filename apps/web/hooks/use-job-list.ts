@@ -7,7 +7,7 @@
  * (15 s), because a queue only changes when a worker acts. Pauses while the tab
  * is hidden and resumes on return — a background tab must not keep asking.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   isActiveStatus,
@@ -31,15 +31,27 @@ export type JobListState = {
   /** True when the last refresh failed; the list keeps its last known rows. */
   error: boolean;
   loading: boolean;
+  /**
+   * Cancel a job (stop button in the list row). The response is deliberately
+   * ignored — the next poll, triggered immediately, is the truth about the
+   * state; a 409 means the job finished first and already shows its terminal
+   * state.
+   */
+  cancelJob: (jobId: string) => void;
+  /** The job a cancel was just requested for, so the row can say "Stopping…". */
+  cancelingJobId: string | null;
 };
 
-const EMPTY: JobListState = { jobs: [], activeCount: 0, pool: null, error: false, loading: true };
-
 export function useJobListPolling(): JobListState {
-  const [state, setState] = useState<JobListState>(EMPTY);
+  const [state, setState] = useState<
+    Omit<JobListState, "cancelJob"> & { cancelingJobId: string | null }
+  >({ jobs: [], activeCount: 0, pool: null, error: false, loading: true, cancelingJobId: null });
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stoppedRef = useRef(false);
   const delayRef = useRef(ACTIVE_INTERVAL_MS);
+  // Ref, not state: pollNow must read a fresh value without re-creating the
+  // callback the rows render.
+  const pollNowRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     stoppedRef.current = false;
@@ -56,7 +68,7 @@ export function useJobListPolling(): JobListState {
         // workers if the field ever went missing.
         const pool = isPoolInfo(body.pool) ? body.pool : null;
         delayRef.current = activeCount > 0 ? ACTIVE_INTERVAL_MS : IDLE_INTERVAL_MS;
-        setState({ jobs, activeCount, pool, error: false, loading: false });
+        setState((prev) => ({ jobs, activeCount, pool, error: false, loading: false, cancelingJobId: prev.cancelingJobId }));
       } catch {
         // Keep whatever was rendered: a failed refresh is not an empty list.
         setState((prev) => ({ ...prev, error: true, loading: false }));
@@ -78,6 +90,12 @@ export function useJobListPolling(): JobListState {
       schedule();
     }
 
+    pollNowRef.current = () => {
+      if (stoppedRef.current) return;
+      if (timerRef.current) clearTimeout(timerRef.current);
+      void tick();
+    };
+
     void tick();
     return () => {
       stoppedRef.current = true;
@@ -86,5 +104,15 @@ export function useJobListPolling(): JobListState {
     };
   }, []);
 
-  return state;
+  const cancelJob = useCallback((jobId: string) => {
+    setState((prev) => ({ ...prev, cancelingJobId: jobId }));
+    void fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" })
+      .catch(() => undefined)
+      .finally(() => {
+        setState((prev) => (prev.cancelingJobId === jobId ? { ...prev, cancelingJobId: null } : prev));
+        pollNowRef.current();
+      });
+  }, []);
+
+  return { ...state, cancelJob };
 }
