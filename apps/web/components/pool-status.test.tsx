@@ -14,7 +14,8 @@ import type { JobListItem, WorkerPoolInfo } from "@/lib/job-list-types";
 /**
  * Home-page pool strip (concurrency plan C4). The strings a person reads before
  * submitting anything: how many workers are up, how many jobs they will run at
- * once, and what the pool needs from the machine.
+ * once, and what the pool needs from the machine — including the case where the
+ * machine does not have it.
  */
 
 const POOL: WorkerPoolInfo = {
@@ -23,6 +24,8 @@ const POOL: WorkerPoolInfo = {
   threadsPerWorker: 2,
   ramPerWorkerMb: 1024,
   ramTotalMb: 2048,
+  // Plenty free: the normal case, so the existing strings stay the plain ones.
+  freeRamMb: 8192,
 };
 
 function item(patch: Partial<JobListItem> & { jobId: string; status: string }): JobListItem {
@@ -163,6 +166,83 @@ describe("PoolStatus", () => {
     respondWith({ jobs: [], pool: { ...POOL, configured: 1, running: 1, ramPerWorkerMb: 512, ramTotalMb: 512 } });
     const container = await render();
     assert.ok(container.textContent?.includes("about 512 MB RAM for the pool"));
+  });
+
+  it("warns when the machine has less free RAM than the pool needs", async () => {
+    // The guidance above is a plan; this is the check that the plan fits.
+    respondWith({ jobs: [], pool: { ...POOL, freeRamMb: 1228 } });
+    const container = await render();
+    const warning = container.querySelector('[data-testid="pool-ram-warning"]');
+
+    assert.ok(warning, "expected a low-memory warning");
+    assert.ok(warning.textContent?.includes("only 1.2 GB RAM free"), warning.textContent ?? "");
+    assert.ok(warning.textContent?.includes("the pool needs about 2 GB"), warning.textContent ?? "");
+    // The warning replaces the plain guidance rather than repeating it.
+    assert.equal(container.textContent?.includes("RAM for the pool"), false);
+  });
+
+  it("reports sub-gigabyte free memory in megabytes", async () => {
+    // "about 0 GB free" would be worse than useless.
+    respondWith({ jobs: [], pool: { ...POOL, freeRamMb: 480 } });
+    const container = await render();
+    const warning = container.querySelector('[data-testid="pool-ram-warning"]');
+
+    assert.ok(warning?.textContent?.includes("only 480 MB RAM free"), warning?.textContent ?? "");
+  });
+
+  it("treats exactly enough free RAM as enough", async () => {
+    // The boundary stays quiet: a pool sized to the machine always sits here,
+    // and a warning at the edge would be the normal case rather than the
+    // exception it needs to be to mean anything.
+    respondWith({ jobs: [], pool: { ...POOL, freeRamMb: POOL.ramTotalMb } });
+    const container = await render();
+
+    assert.equal(container.querySelector('[data-testid="pool-ram-warning"]'), null);
+    assert.ok(container.textContent?.includes("about 2 GB RAM for the pool"));
+  });
+
+  it("keeps the guidance when free RAM cannot be read", async () => {
+    // Unknown is not "none": the warning is withheld, not invented. An absent
+    // colon here is what stops a platform that will not report memory from
+    // nagging about memory on every page load.
+    respondWith({ jobs: [], pool: { ...POOL, freeRamMb: null } });
+    const container = await render();
+
+    assert.equal(container.querySelector('[data-testid="pool-ram-warning"]'), null);
+    assert.ok(container.textContent?.includes("about 2 GB RAM for the pool"));
+  });
+
+  it("warns about memory without overriding what the workers are doing", async () => {
+    // Two independent facts on one line: both workers up is still the headline
+    // when memory is short, because the fix for each is different.
+    respondWith({ jobs: [], pool: { ...POOL, freeRamMb: 300 } });
+    const container = await render();
+    const text = container.textContent ?? "";
+
+    assert.ok(text.includes("2 workers ready"));
+    assert.ok(text.includes("up to 2 jobs at once"));
+    assert.ok(container.querySelector('[data-testid="pool-ram-warning"]'));
+  });
+
+  it("warns even when no worker is running", async () => {
+    // The pool is still configured; the memory it will need when it starts is
+    // exactly what someone restarting the workers needs to know.
+    respondWith({ jobs: [], pool: { ...POOL, running: 0, freeRamMb: 512 } });
+    const container = await render();
+
+    assert.ok(container.textContent?.includes("No worker running"));
+    assert.ok(container.querySelector('[data-testid="pool-ram-warning"]'));
+  });
+
+  it("renders nothing when the pool block is missing a field it needs", async () => {
+    // The guard rejects the whole block rather than letting an unvalidated
+    // payload through: a strip built from `undefined` is worse than none.
+    const incomplete: Record<string, unknown> = { ...POOL };
+    delete incomplete.freeRamMb;
+    respondWith({ jobs: [], pool: incomplete });
+    const container = await render();
+
+    assert.equal(container.textContent, "");
   });
 
   it("marks the numbers as last known when a refresh fails", async () => {

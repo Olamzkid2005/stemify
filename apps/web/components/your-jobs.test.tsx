@@ -59,6 +59,7 @@ const POOL: WorkerPoolInfo = {
   threadsPerWorker: 2,
   ramPerWorkerMb: 1024,
   ramTotalMb: 2048,
+  freeRamMb: 8192,
 };
 
 function respondWith(jobs: JobListItem[]): void {
