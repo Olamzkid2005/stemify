@@ -44,15 +44,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Active-job limit (plan Task 13 / Section 15: MAX_ACTIVE_JOBS).
- * Queued + processing jobs count toward the limit; terminal states do not.
+ * Active-job limit (plan Task 13 / Section 15: MAX_ACTIVE_JOBS; concurrency
+ * plan C3). Queued + processing jobs count toward the limit; terminal states
+ * do not.
+ *
+ * The default is the worker pool (STEMIFY_WORKER_CONCURRENCY, 2) plus one job
+ * of headroom, so submitting while others run queues instead of being refused
+ * — the parallel-pool product goal. The limit stays a backstop, not the pool
+ * size: it bounds what one browser may pile up.
  */
-function activeJobLimit(): number {
-  const raw = Number(process.env.MAX_ACTIVE_JOBS ?? "1");
-  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+/** Default cap for one browser: pool 2 + 1 waiting job (concurrency plan 8). */
+export const DEFAULT_ACTIVE_JOB_LIMIT = 3;
+
+export function activeJobLimit(): number {
+  const raw = Number(process.env.MAX_ACTIVE_JOBS ?? DEFAULT_ACTIVE_JOB_LIMIT);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_ACTIVE_JOB_LIMIT;
 }
 
-function activeJobCount(ownerKey: string): number {
+/** Queued + processing jobs for one owner — what the cap is measured against. */
+export function activeJobCount(ownerKey: string): number {
   const row = db.get<{ n: number }>(
     "SELECT COUNT(*) AS n FROM jobs WHERE owner_key = ? AND status IN ('queued', 'processing')",
     ownerKey,
@@ -90,6 +100,8 @@ export async function createJob(input: CreateJobInput): Promise<CreateJobResult>
   }
 
   // Active-job limit (plan Task 13): reject before touching storage or rows.
+  // 429 stays the backstop for a client that keeps submitting (concurrency
+  // plan C3) — the default cap leaves room for a pool to be busy.
   if (activeJobCount(input.ownerKey) >= activeJobLimit()) {
     return { ok: false, status: 429, error: "too_many_active_jobs" };
   }

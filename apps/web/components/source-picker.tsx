@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { useJobs } from "@/components/jobs-context";
 import { UploadDropzone } from "@/components/upload-dropzone";
 import { OUTPUT_FORMATS, QUALITY_PRESETS, SEPARATION_MODES } from "@/lib/limits";
 
@@ -99,7 +100,9 @@ function sourceErrorMessage(code: string, tab: SourceTab): string {
     return "That source is not supported.";
   }
   if (code === "too_many_active_jobs") {
-    return "You already have a job running. Wait for it to finish first.";
+    // The cap allows a full worker pool plus one waiting job, so reaching it
+    // means several are already going. Name the action that helps.
+    return "You already have several jobs in progress. Wait for one to finish before starting another.";
   }
   if (code === "spotify_unavailable") {
     return LINK_TABS.spotify.unavailable ?? "Spotify input is not available on this machine.";
@@ -119,16 +122,28 @@ function sourceErrorMessage(code: string, tab: SourceTab): string {
 export function SourcePicker({ spotifyAvailable }: { spotifyAvailable: boolean }) {
   const router = useRouter();
   const navigate = useCallback((href: string) => router.push(href), [router]);
-  return <SourcePickerForm navigate={navigate} spotifyAvailable={spotifyAvailable} />;
+  // Live count of this browser's active jobs, from the page's single poller
+  // (concurrency plan C4). Used only to warn — never to refuse a submission.
+  const { activeCount } = useJobs();
+  return (
+    <SourcePickerForm
+      activeJobs={activeCount}
+      navigate={navigate}
+      spotifyAvailable={spotifyAvailable}
+    />
+  );
 }
 
 export function SourcePickerForm({
   navigate,
   spotifyAvailable,
+  activeJobs = 0,
 }: {
   navigate: (href: string) => void;
   /** Server-provided capability; false hides the form for a source this machine cannot fetch. */
   spotifyAvailable: boolean;
+  /** This browser's queued+processing job count; 0 when unknown. */
+  activeJobs?: number;
 }) {
   const [tab, setTab] = useState<SourceTab>("upload");
   const [separationMode, setSeparationMode] = useState<SeparationMode>("vocals_instrumental");
@@ -330,6 +345,20 @@ export function SourcePickerForm({
           </button>
         </form>
       )}
+
+      {/* Warn but always accept (concurrency plan C4/3.6): several jobs can run
+          at once, and more than one browser can submit, so submitting again is
+          legitimate — it just shares the CPU. Saying so up front is the whole
+          point; refusing the job or hiding the form would not be. */}
+      {activeJobs > 0 && !error ? (
+        <p
+          className="mt-4 w-full max-w-xl text-left text-xs leading-relaxed text-amber-300/80"
+          data-testid="pool-warning"
+        >
+          You already have {activeJobs} {activeJobs === 1 ? "job" : "jobs"} running.
+          Starting another shares the same CPU, so all of them will take longer.
+        </p>
+      ) : null}
 
       {error ? (
         <p

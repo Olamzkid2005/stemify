@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getOrCreateGuestId } from "@/lib/auth/guest";
 import { db } from "@/lib/db/client";
 import { type JobOutputRow, type JobRow } from "@/lib/db/schema";
-import { idempotencyHash } from "@/lib/jobs";
+import { activeJobCount, activeJobLimit, idempotencyHash } from "@/lib/jobs";
 import { getStorage } from "@/lib/storage";
 
 /**
@@ -15,7 +15,7 @@ import { getStorage } from "@/lib/storage";
  * Toms as extra outputs of the new job. The parent job is left untouched.
  *
  * Guardrails: guest ownership, completed and unexpired parent, a stored drums
- * output that still exists, and one active job per owner (mirroring uploads).
+ * output that still exists, and the shared active-job cap (MAX_ACTIVE_JOBS).
  * The idempotency key is derived from the parent job id, so double clicks
  * return the same refine job.
  */
@@ -58,12 +58,10 @@ export async function POST(
     return NextResponse.json({ error: "results_expired" }, { status: 410 });
   }
 
-  // One active job per owner, same as uploads (plan Task 13).
-  const active = db.get<{ n: number }>(
-    "SELECT COUNT(*) AS n FROM jobs WHERE owner_key = ? AND status IN ('queued', 'processing')",
-    ownerKey,
-  );
-  if ((active?.n ?? 0) >= 1) {
+  // Same cap as uploads, from the same place (concurrency plan C3): one bound
+  // for the whole app, so a refine job cannot be refused by a stricter rule
+  // than the upload that created its parent.
+  if (activeJobCount(ownerKey) >= activeJobLimit()) {
     return NextResponse.json({ error: "too_many_active_jobs" }, { status: 429 });
   }
 

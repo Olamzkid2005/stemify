@@ -24,6 +24,10 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", {
 // globals (`navigator` on Node 26), and a plain assignment to those throws.
 const globals: Record<string, unknown> = {
   window: dom.window,
+  // `self` as well as `window`: Next's router prefetch (`next/link`) reads the
+  // bare global `self` to find `requestIdleCallback`, so rendering anything
+  // that contains a Link throws without it in this environment.
+  self: dom.window,
   document: dom.window.document,
   navigator: dom.window.navigator,
   HTMLElement: dom.window.HTMLElement,

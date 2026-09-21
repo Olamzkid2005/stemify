@@ -1,4 +1,6 @@
+import { JobsProvider } from "@/components/jobs-context";
 import { SourcePicker } from "@/components/source-picker";
+import { YourJobs } from "@/components/your-jobs";
 import { spotifyEnabled } from "@/lib/capabilities";
 
 /**
@@ -60,8 +62,14 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Input Mode Switcher + Upload/YouTube/Spotify flows */}
-        <SourcePicker spotifyAvailable={spotifyEnabled()} />
+        {/* Input Mode Switcher + Upload/YouTube/Spotify flows. The picker and
+            the job list share one poller (concurrency plan C4): the picker
+            warns when jobs are already running, and the list shows where each
+            one is, including its place in the queue. */}
+        <JobsProvider>
+          <SourcePicker spotifyAvailable={spotifyEnabled()} />
+          <YourJobs />
+        </JobsProvider>
 
         {/* Feature Badges */}
         <div className="mt-10 flex flex-wrap items-center justify-center gap-6 md:gap-8 text-zinc-500 text-[11px] font-semibold tracking-wider">

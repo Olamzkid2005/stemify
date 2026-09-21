@@ -62,7 +62,13 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function render({ spotifyAvailable = true }: { spotifyAvailable?: boolean } = {}): HTMLElement {
+function render({
+  spotifyAvailable = true,
+  activeJobs = 0,
+}: {
+  spotifyAvailable?: boolean;
+  activeJobs?: number;
+} = {}): HTMLElement {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -73,6 +79,7 @@ function render({ spotifyAvailable = true }: { spotifyAvailable?: boolean } = {}
     // the assertions need, and it keeps the router out of the test entirely.
     root.render(
       <SourcePickerForm
+        activeJobs={activeJobs}
         navigate={(href) => navigated.push(href)}
         spotifyAvailable={spotifyAvailable}
       />,
@@ -337,6 +344,32 @@ describe("SourcePickerForm", () => {
     assert.ok(container.querySelector("#link-url"), "YouTube still takes a link");
     click(tab(container, "Upload File"));
     assert.ok(container.textContent?.includes("Drop an audio file here"));
+  });
+
+  it("warns that another job already shares the CPU, and still accepts", async () => {
+    const container = render({ activeJobs: 2 });
+
+    // Concurrency plan 3.6: warn, never refuse — submitting while others run is
+    // a legitimate thing to do, it just makes every job slower.
+    assert.ok(container.textContent?.includes("You already have 2 jobs running"));
+    assert.ok(container.textContent?.includes("shares the same CPU"));
+
+    click(tab(container, "YouTube Link"));
+    type(linkInput(container), "https://www.youtube.com/watch?v=abc123");
+    click(acknowledgement(container));
+    assert.equal(submitButton(container).disabled, false, "the warning must not block submission");
+    await act(async () => {
+      fireSubmit(container);
+    });
+    await flushPromises();
+
+    assert.equal(fetchCalls.length, 1);
+    assert.deepEqual(navigated, ["/jobs/job_abc123"]);
+  });
+
+  it("says nothing about other jobs when there are none", () => {
+    const container = render();
+    assert.equal(container.textContent?.includes("already have"), false);
   });
 
   it("surfaces a rejected job instead of navigating", async () => {

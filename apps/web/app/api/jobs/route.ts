@@ -2,6 +2,27 @@ import { NextResponse } from "next/server";
 
 import { getOrCreateGuestId } from "@/lib/auth/guest";
 import { createJob } from "@/lib/jobs";
+import { listJobViews } from "@/lib/job-list";
+
+/**
+ * GET /api/jobs (concurrency plan C4).
+ *
+ * This browser's own jobs, newest activity first, capped at JOB_LIST_LIMIT.
+ * Owner-scoped in SQL and projected through the same `getJobView` the status
+ * endpoint uses, so the list cannot show a field the single-job route hides.
+ * A queued row carries its global queue position (1 = next to run).
+ */
+export async function GET() {
+  try {
+    const ownerKey = await getOrCreateGuestId();
+    const jobs = await listJobViews(ownerKey);
+    return NextResponse.json({ jobs }, { headers: { "cache-control": "no-store" } });
+  } catch {
+    // A list is convenience, never the source of truth: failing it must not
+    // look like "you have no jobs", so the client can tell it apart.
+    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+  }
+}
 
 /**
  * POST /api/jobs (plan §11.2). Guest-authenticated; body validation and

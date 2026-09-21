@@ -42,6 +42,16 @@ export const UPLOAD_STEM_KEYS = [
   "piano",
 ] as const;
 
+/**
+ * Short "what you get" summary for a separation mode, shared by the job page
+ * and the home-page job list so the two can never describe a mode differently.
+ */
+export function modeStemSummary(mode: string): string {
+  if (mode === "full_stems") return "3 stems";
+  if (mode === "drum_breakdown") return "4 drum parts";
+  return "2 stems";
+}
+
 export const CLIENT_LIMITS = {
   maxUploadBytes: 100 * 1024 * 1024, // 100 MB
   maxDurationSeconds: 480, // 8 minutes

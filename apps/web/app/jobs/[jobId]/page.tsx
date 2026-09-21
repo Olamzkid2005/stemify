@@ -11,6 +11,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { useJobPolling } from "@/hooks/use-job-polling";
+import { modeStemSummary } from "@/lib/limits";
 import { formatElapsed, stageElapsedMs, type StageTiming } from "@/lib/stage-timings";
 
 /** Source label shown under the progress ring, per input source. */
@@ -228,7 +229,7 @@ export default function JobPage() {
         {job.progressMessage}
       </p>
       <p className="text-xs text-zinc-500">
-        {SOURCE_LABELS[job.source.type] ?? "Local upload"} · {job.userStage} · {job.mode === "full_stems" ? "3 stems" : job.mode === "drum_breakdown" ? "4 drum parts" : "2 stems"}
+        {SOURCE_LABELS[job.source.type] ?? "Local upload"} · {job.userStage} · {modeStemSummary(job.mode)}
         {totalElapsed ? ` · running ${totalElapsed}` : null}
       </p>
 
